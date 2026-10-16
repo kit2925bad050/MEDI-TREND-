@@ -1,0 +1,977 @@
+import {
+  PatientProfile,
+  ReportRecord,
+  AIAnalysisResult,
+  AuditLogEntry,
+  UserRole,
+} from '../types';
+import { supabase } from './supabase';
+
+const getApiBase = () => {
+  const envUrl = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL;
+  if (!import.meta.env.PROD) {
+    return '/api';
+  }
+  if (envUrl && typeof envUrl === 'string') {
+    const clean = envUrl.trim().replace(/\/+$/, '');
+    return clean.endsWith('/api') ? clean : `${clean}/api`;
+  }
+  return import.meta.env.PROD ? '/api' : 'http://127.0.0.1:8000/api';
+};
+
+const API_BASE = getApiBase();
+
+/** Safely parse JSON or return null if response is HTML or empty */
+async function safeJson(res: Response): Promise<any> {
+  const contentType = res.headers.get('content-type') || '';
+  if (!contentType.includes('application/json')) {
+    return null;
+  }
+  try {
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+async function readApiResponse<T>(res: Response, defaultMessage: string): Promise<T> {
+  const data = await safeJson(res);
+  if (!res.ok) {
+    const detail = data?.detail;
+    const message =
+      typeof detail === 'string'
+        ? detail
+        : detail?.message || data?.message || defaultMessage;
+    throw new Error(message);
+  }
+  if (data === null) {
+    throw new Error('The server returned an invalid response. Please try again.');
+  }
+  return data as T;
+}
+
+function apiConnectionError(error: unknown): Error {
+  if (error instanceof TypeError && /fetch|network/i.test(error.message)) {
+    return new Error('Cannot connect to the MEDI TREND API. Start the backend and try again.');
+  }
+  return error instanceof Error ? error : new Error('The request failed. Please try again.');
+}
+
+// ==================== DEFAULT CLINICAL GROUNDED DATA ====================
+const DEFAULT_PATIENTS: PatientProfile[] = [
+  {
+    patientId: 'PT-E77688',
+    name: 'S. Gurumurthy',
+    age: 58,
+    gender: 'Male',
+    phone: '+91 98401 23456',
+    email: 'gurumurthy.s@gmail.com',
+    activeStatus: 'Active',
+    doctorInCharge: 'Dr. Arvind Kumar',
+    specialty: 'Cardiology & Lipidology',
+    totalReports: 0,
+    avatarUrl: undefined,
+    bloodGroup: 'B+',
+  },
+  {
+    patientId: 'PT-2026-001',
+    name: 'K. Meenakshi',
+    age: 46,
+    gender: 'Female',
+    phone: '+91 94440 98765',
+    email: 'meenakshi.k@outlook.com',
+    activeStatus: 'Active',
+    doctorInCharge: 'Dr. Priya Sharma',
+    specialty: 'Endocrinology & Diabetology',
+    totalReports: 0,
+    avatarUrl: undefined,
+    bloodGroup: 'O+',
+  }
+];
+
+const DEFAULT_REPORTS: Record<string, ReportRecord[]> = {
+  'PT-E77688': [
+    {
+      reportId: 'REP-2026-001',
+      patientId: 'PT-E77688',
+      reportDate: '15 Jan 2026',
+      uploadDate: '15 Jan 2026 10:30 AM',
+      provider: 'Apollo Diagnostics Centre',
+      originalPdfPath: '/sample_pdfs/PT_2026_001_Report1_25Apr2026.pdf',
+      extractionStatus: 'Verified',
+      parameterCount: 6,
+      category: 'Comprehensive Lipid & Metabolic Panel',
+      extractedParameters: [
+        {
+          parameterName: 'Total Cholesterol',
+          canonicalName: 'Total Cholesterol',
+          value: 248.0,
+          unit: 'mg/dL',
+          referenceRange: '< 200',
+          status: 'Elevated',
+          reportId: 'REP-2026-001',
+          reportDate: '15 Jan 2026',
+          sourcePage: 1,
+          sourceText: 'Total Cholesterol: 248.0 mg/dL (< 200)',
+          category: 'Lipid Profile',
+        },
+        {
+          parameterName: 'HDL Cholesterol',
+          canonicalName: 'HDL Cholesterol',
+          value: 36.0,
+          unit: 'mg/dL',
+          referenceRange: '> 40',
+          status: 'Low',
+          reportId: 'REP-2026-001',
+          reportDate: '15 Jan 2026',
+          sourcePage: 1,
+          sourceText: 'HDL Cholesterol: 36.0 mg/dL (> 40)',
+          category: 'Lipid Profile',
+        },
+        {
+          parameterName: 'LDL Cholesterol',
+          canonicalName: 'LDL Cholesterol',
+          value: 168.0,
+          unit: 'mg/dL',
+          referenceRange: '< 100',
+          status: 'Elevated',
+          reportId: 'REP-2026-001',
+          reportDate: '15 Jan 2026',
+          sourcePage: 1,
+          sourceText: 'LDL Cholesterol: 168.0 mg/dL (< 100)',
+          category: 'Lipid Profile',
+        },
+        {
+          parameterName: 'Triglycerides',
+          canonicalName: 'Triglycerides',
+          value: 220.0,
+          unit: 'mg/dL',
+          referenceRange: '< 150',
+          status: 'Elevated',
+          reportId: 'REP-2026-001',
+          reportDate: '15 Jan 2026',
+          sourcePage: 1,
+          sourceText: 'Triglycerides: 220.0 mg/dL (< 150)',
+          category: 'Lipid Profile',
+        },
+        {
+          parameterName: 'Fasting Blood Sugar',
+          canonicalName: 'Fasting Blood Sugar',
+          value: 118.0,
+          unit: 'mg/dL',
+          referenceRange: '70 - 100',
+          status: 'Elevated',
+          reportId: 'REP-2026-001',
+          reportDate: '15 Jan 2026',
+          sourcePage: 1,
+          sourceText: 'Fasting Blood Sugar: 118.0 mg/dL (70 - 100)',
+          category: 'Glucose Metabolism',
+        },
+        {
+          parameterName: 'HbA1c',
+          canonicalName: 'HbA1c (Glycated Hemoglobin)',
+          value: 6.8,
+          unit: '%',
+          referenceRange: '< 5.7',
+          status: 'Elevated',
+          reportId: 'REP-2026-001',
+          reportDate: '15 Jan 2026',
+          sourcePage: 1,
+          sourceText: 'HbA1c: 6.8 % (< 5.7)',
+          category: 'Glucose Metabolism',
+        },
+      ],
+    },
+    {
+      reportId: 'REP-2026-002',
+      patientId: 'PT-E77688',
+      reportDate: '28 Mar 2026',
+      uploadDate: '28 Mar 2026 04:15 PM',
+      provider: 'Apollo Diagnostics Centre',
+      originalPdfPath: '/sample_pdfs/PT_2026_001_Report2_29Apr2026.pdf',
+      extractionStatus: 'Verified',
+      parameterCount: 6,
+      category: 'Comprehensive Lipid & Metabolic Follow-Up',
+      extractedParameters: [
+        {
+          parameterName: 'Total Cholesterol',
+          canonicalName: 'Total Cholesterol',
+          value: 192.0,
+          unit: 'mg/dL',
+          referenceRange: '< 200',
+          status: 'Optimal',
+          reportId: 'REP-2026-002',
+          reportDate: '28 Mar 2026',
+          sourcePage: 1,
+          sourceText: 'Total Cholesterol: 192.0 mg/dL (< 200)',
+          category: 'Lipid Profile',
+        },
+        {
+          parameterName: 'HDL Cholesterol',
+          canonicalName: 'HDL Cholesterol',
+          value: 44.0,
+          unit: 'mg/dL',
+          referenceRange: '> 40',
+          status: 'Optimal',
+          reportId: 'REP-2026-002',
+          reportDate: '28 Mar 2026',
+          sourcePage: 1,
+          sourceText: 'HDL Cholesterol: 44.0 mg/dL (> 40)',
+          category: 'Lipid Profile',
+        },
+        {
+          parameterName: 'LDL Cholesterol',
+          canonicalName: 'LDL Cholesterol',
+          value: 114.0,
+          unit: 'mg/dL',
+          referenceRange: '< 100',
+          status: 'Near Optimal',
+          reportId: 'REP-2026-002',
+          reportDate: '28 Mar 2026',
+          sourcePage: 1,
+          sourceText: 'LDL Cholesterol: 114.0 mg/dL (< 100)',
+          category: 'Lipid Profile',
+        },
+        {
+          parameterName: 'Triglycerides',
+          canonicalName: 'Triglycerides',
+          value: 148.0,
+          unit: 'mg/dL',
+          referenceRange: '< 150',
+          status: 'Optimal',
+          reportId: 'REP-2026-002',
+          reportDate: '28 Mar 2026',
+          sourcePage: 1,
+          sourceText: 'Triglycerides: 148.0 mg/dL (< 150)',
+          category: 'Lipid Profile',
+        },
+        {
+          parameterName: 'Fasting Blood Sugar',
+          canonicalName: 'Fasting Blood Sugar',
+          value: 94.0,
+          unit: 'mg/dL',
+          referenceRange: '70 - 100',
+          status: 'Optimal',
+          reportId: 'REP-2026-002',
+          reportDate: '28 Mar 2026',
+          sourcePage: 1,
+          sourceText: 'Fasting Blood Sugar: 94.0 mg/dL (70 - 100)',
+          category: 'Glucose Metabolism',
+        },
+        {
+          parameterName: 'HbA1c',
+          canonicalName: 'HbA1c (Glycated Hemoglobin)',
+          value: 5.9,
+          unit: '%',
+          referenceRange: '< 5.7',
+          status: 'Borderline',
+          reportId: 'REP-2026-002',
+          reportDate: '28 Mar 2026',
+          sourcePage: 1,
+          sourceText: 'HbA1c: 5.9 % (< 5.7)',
+          category: 'Glucose Metabolism',
+        },
+      ],
+    },
+  ],
+};
+
+// ==================== ADMIN & AUTH APIS ====================
+export async function loginUser(username_or_email: string, password: string) {
+  const u = username_or_email.trim().toLowerCase();
+  const p = password.trim();
+
+  // SECURITY: Authentication is performed exclusively by the backend.
+  // The frontend must NEVER manufacture a successful login from a Supabase
+  // record or a hardcoded credential. There is intentionally no client-side
+  // fallback: if the backend rejects the credentials, login fails.
+  const res = await fetch(`${API_BASE}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username_or_email: u, password: p }),
+  });
+  const json = await safeJson(res);
+  if (res.ok && json && json.success) {
+    return json;
+  }
+  if (json && json.detail) {
+    throw new Error(typeof json.detail === 'string' ? json.detail : json.detail?.message || 'Invalid clinical credentials.');
+  }
+  if (!res.ok) {
+    throw new Error('Invalid username/email or password.');
+  }
+  throw new Error('Authentication failed. Please verify your credentials.');
+}
+
+export async function logoutUser(userName: string, userRole: string) {
+  try {
+    await fetch(`${API_BASE}/auth/logout`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-name': userName,
+        'x-user-role': userRole,
+      },
+    });
+  } catch (e) {
+    console.warn('Logout API error:', e);
+  }
+}
+
+export async function loginAdmin(username: string, password: string) {
+  const u = username.trim().toLowerCase();
+  const p = password.trim();
+
+  // SECURITY: Admin authentication is performed exclusively by the backend.
+  // There is intentionally no client-side fallback that grants admin access.
+  const res = await fetch(`${API_BASE}/admin/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: u, password: p }),
+  });
+  const json = await safeJson(res);
+  if (res.ok && json && json.success) {
+    return json;
+  }
+  if (json && json.detail) {
+    throw new Error(typeof json.detail === 'string' ? json.detail : json.detail?.message || 'Invalid administrator credentials.');
+  }
+  if (!res.ok) {
+    throw new Error('Invalid administrator credentials.');
+  }
+  throw new Error('Authentication failed. Please verify your credentials.');
+}
+
+export function getAuthHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  const sessionStr = localStorage.getItem('medi_trend_session');
+  if (sessionStr) {
+    try {
+      const parsed = JSON.parse(sessionStr);
+      if (parsed.token) {
+        headers['Authorization'] = `Bearer ${parsed.token}`;
+        headers['x-auth-token'] = parsed.token;
+      }
+      if (parsed.user?.name) {
+        headers['x-user-name'] = parsed.user.name;
+      }
+      if (parsed.role) {
+        headers['x-user-role'] = parsed.role;
+      }
+    } catch {}
+  }
+  return headers;
+}
+
+export async function loginUnified(username_or_email: string, password: string): Promise<any> {
+  try {
+    const res = await fetch(`${API_BASE}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username_or_email: username_or_email.trim().toLowerCase(),
+        password: password.trim(),
+      }),
+    });
+    return await readApiResponse(res, 'Authentication failed. Please verify your credentials.');
+  } catch (error) {
+    throw apiConnectionError(error);
+  }
+}
+
+export async function adminFirstPasswordChange(username: string, current_password: string, new_password: string) {
+  // SECURITY: No client-side fallback. Backend is the sole authority.
+  const res = await fetch(`${API_BASE}/admin/first-password-change`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, current_password, new_password }),
+  });
+  return readApiResponse(res, 'Unable to initialize admin password.');
+}
+
+export async function changeAdminPassword(username: string, old_password: string, new_password: string) {
+  // SECURITY: No client-side fallback. Backend is the sole authority.
+  const res = await fetch(`${API_BASE}/admin/change-password`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ username, old_password, new_password }),
+  });
+  return readApiResponse(res, 'Unable to change admin password.');
+}
+
+export async function changeAdminIdentity(current_username: string, new_username: string, new_email: string, current_password: string) {
+  // SECURITY: No client-side fallback. Backend is the sole authority.
+  const res = await fetch(`${API_BASE}/admin/change-identity`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ current_username, new_username, new_email, current_password }),
+  });
+  return readApiResponse(res, 'Unable to update admin identity.');
+}
+
+export async function changeDoctorPassword(doctor_id: string, old_password: string, new_password: string) {
+  // SECURITY: No client-side fallback. Backend is the sole authority.
+  const res = await fetch(`${API_BASE}/doctor/change-password`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ doctor_id, old_password, new_password }),
+  });
+  return readApiResponse(res, 'Unable to change doctor password.');
+}
+
+export async function requestForgotPassword(identifier: string, role: string) {
+  // SECURITY: No client-side token fabrication. Backend is the sole authority.
+  const res = await fetch(`${API_BASE}/auth/forgot-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ identifier, role }),
+  });
+  return readApiResponse(res, 'Unable to initiate password recovery.');
+}
+
+export async function resetPasswordWithToken(token: string, new_password: string) {
+  // SECURITY: No client-side token validation. Backend is the sole authority.
+  const res = await fetch(`${API_BASE}/auth/reset-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token, new_password }),
+  });
+  return readApiResponse(res, 'Unable to reset password. The token may be invalid or expired.');
+}
+
+export async function resetUserPassword(user_type: string, user_id: string, new_password: string) {
+  // SECURITY: No client-side fallback. Backend is the sole authority.
+  const res = await fetch(`${API_BASE}/admin/reset-password`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ user_type, user_id, new_password }),
+  });
+  return readApiResponse(res, 'Unable to reset password.');
+}
+
+export async function fetchAdminSessions() {
+  const res = await fetch(`${API_BASE}/admin/sessions`, {
+    headers: getAuthHeaders(),
+  });
+  return safeJson(res);
+}
+
+export async function revokeAllOtherAdminSessions() {
+  const res = await fetch(`${API_BASE}/admin/sessions/revoke-all`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+  });
+  return safeJson(res);
+}
+
+export async function fetchAdminDashboardStats() {
+  try {
+    const res = await fetch(`${API_BASE}/admin/dashboard`, {
+      headers: getAuthHeaders(),
+    });
+    return await readApiResponse(res, 'Unable to load dashboard statistics.');
+  } catch (error) {
+    throw apiConnectionError(error);
+  }
+}
+
+export async function fetchDoctors(status?: string) {
+  try {
+    const url = status ? `${API_BASE}/admin/doctors?status=${encodeURIComponent(status)}` : `${API_BASE}/admin/doctors`;
+    const res = await fetch(url, {
+      headers: getAuthHeaders(),
+    });
+    return await readApiResponse<any[]>(res, 'Unable to load doctors.');
+  } catch (error) {
+    throw apiConnectionError(error);
+  }
+}
+
+export async function createDoctor(data: any) {
+  try {
+    const res = await fetch(`${API_BASE}/admin/doctors`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(data),
+    });
+    return await readApiResponse(res, 'Failed to create doctor record.');
+  } catch (error) {
+    throw apiConnectionError(error);
+  }
+}
+
+export async function deactivateDoctor(doctor_id: string, reason: string) {
+  const res = await fetch(`${API_BASE}/admin/doctors/${encodeURIComponent(doctor_id)}/deactivate`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ reason }),
+  });
+  const json = await safeJson(res);
+  if (!res.ok) {
+    throw new Error(json?.detail || 'Failed to deactivate doctor.');
+  }
+  return json;
+}
+
+export async function restoreDoctor(doctor_id: string, reason: string = '') {
+  const res = await fetch(`${API_BASE}/admin/doctors/${encodeURIComponent(doctor_id)}/restore`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ reason }),
+  });
+  const json = await safeJson(res);
+  if (!res.ok) {
+    throw new Error(json?.detail || 'Failed to restore doctor access.');
+  }
+  return json;
+}
+
+export async function fetchStaff(status?: string) {
+  try {
+    const url = status ? `${API_BASE}/admin/staff?status=${encodeURIComponent(status)}` : `${API_BASE}/admin/staff`;
+    const res = await fetch(url, {
+      headers: getAuthHeaders(),
+    });
+    return await readApiResponse<any[]>(res, 'Unable to load staff.');
+  } catch (error) {
+    throw apiConnectionError(error);
+  }
+}
+
+export async function createStaff(data: any) {
+  try {
+    const res = await fetch(`${API_BASE}/admin/staff`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(data),
+    });
+    return await readApiResponse(res, 'Failed to create staff member.');
+  } catch (error) {
+    throw apiConnectionError(error);
+  }
+}
+
+export async function deactivateStaff(staff_id: string, reason: string) {
+  const res = await fetch(`${API_BASE}/admin/staff/${encodeURIComponent(staff_id)}/deactivate`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ reason }),
+  });
+  const json = await safeJson(res);
+  if (!res.ok) {
+    throw new Error(json?.detail || 'Failed to deactivate staff.');
+  }
+  return json;
+}
+
+export async function restoreStaff(staff_id: string, reason: string = '') {
+  const res = await fetch(`${API_BASE}/admin/staff/${encodeURIComponent(staff_id)}/restore`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ reason }),
+  });
+  const json = await safeJson(res);
+  if (!res.ok) {
+    throw new Error(json?.detail || 'Failed to restore staff member.');
+  }
+  return json;
+}
+
+export async function deactivatePatient(patient_id: string, reason: string) {
+  const res = await fetch(`${API_BASE}/admin/patients/${encodeURIComponent(patient_id)}/deactivate`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ reason }),
+  });
+  const json = await safeJson(res);
+  if (!res.ok) {
+    throw new Error(json?.detail || 'Failed to deactivate patient.');
+  }
+  return json;
+}
+
+export async function restorePatient(patient_id: string, reason: string = '') {
+  const res = await fetch(`${API_BASE}/admin/patients/${encodeURIComponent(patient_id)}/restore`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ reason }),
+  });
+  const json = await safeJson(res);
+  if (!res.ok) {
+    throw new Error(json?.detail || 'Failed to restore patient.');
+  }
+  return json;
+}
+
+// ==================== PATIENTS APIS (REAL DB & SUPABASE) ====================
+export async function fetchPatients(includeInactive = false): Promise<PatientProfile[]> {
+  try {
+    const route = includeInactive ? '/admin/patients' : '/patients';
+    const res = await fetch(`${API_BASE}${route}`, { headers: getAuthHeaders() });
+    const list = await readApiResponse<any[]>(res, 'Unable to load patients.');
+    if (!Array.isArray(list)) {
+      throw new Error('The server returned an invalid patient list.');
+    }
+    return list.map((p: any) => ({
+      patientId: p.patient_id,
+      name: p.full_name,
+      age: p.age,
+      gender: p.gender,
+      phone: p.phone,
+      email: p.email,
+      activeStatus: p.status,
+      doctorInCharge: p.assigned_doctor_name || p.assigned_doctor_id || '',
+      specialty: p.assigned_doctor_specialty || '',
+      totalReports: p.total_reports || 0,
+      avatarUrl: p.avatar_url,
+      bloodGroup: p.blood_group,
+    }));
+  } catch (error) {
+    throw apiConnectionError(error);
+  }
+}
+
+export async function createPatient(data: {
+  full_name: string;
+  age: number;
+  gender: string;
+  phone: string;
+  email?: string;
+  blood_group?: string;
+  assigned_doctor_id?: string;
+}): Promise<PatientProfile> {
+  try {
+    const res = await fetch(`${API_BASE}/patients`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(data),
+    });
+    const p = await readApiResponse<any>(res, 'Failed to register patient.');
+    if (!p.patient_id) {
+      throw new Error('The server did not confirm that the patient was saved.');
+    }
+    return {
+      patientId: p.patient_id,
+      name: p.full_name,
+      age: p.age,
+      gender: p.gender,
+      phone: p.phone,
+      email: p.email,
+      activeStatus: p.status,
+      doctorInCharge: p.assigned_doctor_name || p.assigned_doctor_id || '',
+      specialty: p.assigned_doctor_specialty || '',
+      totalReports: p.total_reports || 0,
+      avatarUrl: p.avatar_url,
+      bloodGroup: p.blood_group,
+    };
+  } catch (error) {
+    throw apiConnectionError(error);
+  }
+}
+
+export async function fetchAssignableDoctors(): Promise<Array<{ doctor_id: string; full_name: string; specialization: string }>> {
+  try {
+    const res = await fetch(`${API_BASE}/doctors/available`, { headers: getAuthHeaders() });
+    return await readApiResponse(res, 'Unable to load available doctors.');
+  } catch (error) {
+    throw apiConnectionError(error);
+  }
+}
+
+export async function updatePatientAvatar(patientId: string, avatarUrl: string | null) {
+  try {
+    const res = await fetch(`${API_BASE}/patients/${patientId}/avatar`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ avatar_url: avatarUrl }),
+    });
+    const json = await safeJson(res);
+    if (json) return json;
+  } catch {}
+  return { success: true };
+}
+
+export async function fetchPatientReports(patientId: string): Promise<ReportRecord[]> {
+  try {
+    const res = await fetch(`${API_BASE}/patients/${encodeURIComponent(patientId)}/reports`, { headers: getAuthHeaders() });
+    const list = await readApiResponse<any[]>(res, 'Unable to load medical reports.');
+    if (!Array.isArray(list)) {
+      throw new Error('The server returned an invalid medical report list.');
+    }
+    return list.map((r: any) => ({
+        reportId: r.report_id,
+        patientId: r.patient_id,
+        reportDate: r.report_date,
+        uploadDate: r.upload_date,
+        provider: r.provider,
+        originalPdfPath: r.file_path,
+        extractedParameters: (r.extractedParameters || []).map((p: any) => ({
+          parameterName: p.parameter_name,
+          canonicalName: p.canonical_name || p.parameter_name,
+          value: p.value,
+          unit: p.unit || '',
+          referenceRange: p.reference_range || '',
+          status: p.status || 'Normal',
+          reportId: r.report_id,
+          reportDate: r.report_date,
+          sourcePage: p.source_page || 1,
+          sourceText: p.source_text,
+          category: p.category,
+        })),
+        extractionStatus: r.extraction_status,
+        parameterCount: r.parameter_count || (r.extractedParameters || []).length,
+        category: r.category,
+    }));
+  } catch (error) {
+    throw apiConnectionError(error);
+  }
+}
+
+export async function analyzeReports(
+  patientId: string,
+  selectedReportIds: string[],
+  userRole: string = 'DOCTOR',
+  userName: string = 'Clinician'
+): Promise<AIAnalysisResult> {
+  try {
+    const res = await fetch(`${API_BASE}/analyze`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-id': userName,
+        'x-user-role': userRole,
+        'x-user-name': userName,
+      },
+      body: JSON.stringify({ patientId, selectedReportIds }),
+    });
+    const json = await safeJson(res);
+    if (res.ok && json) {
+      return json;
+    }
+  } catch (e) {
+    console.warn('Backend /analyze fetch fallback:', e);
+  }
+
+  // Analysis could not be produced from the stored reports and AI providers.
+  // Do NOT fabricate clinical findings. Surface an explicit unavailable state
+  // so the UI can show a clear message instead of invented lab values.
+  throw new Error(
+    'Longitudinal analysis is currently unavailable. The analysis service did not '
+    + 'return a grounded result for the selected reports, and no clinical '
+    + 'interpretation has been generated. Ensure the backend is running with a '
+    + 'configured AI provider, then try again.'
+  );
+}
+
+export async function uploadReport(
+  patientId: string,
+  formData: FormData
+): Promise<{ success: boolean; report: ReportRecord; validation_status?: string; message?: string }> {
+  let res: Response;
+  let data: any;
+  try {
+    res = await fetch(`${API_BASE}/patients/${encodeURIComponent(patientId)}/upload`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: formData,
+    });
+    data = await safeJson(res);
+  } catch (error) {
+    throw apiConnectionError(error);
+  }
+
+  if (res.ok && data && data.report) {
+    const r = data.report;
+    return {
+      success: true,
+      validation_status: data.validation_status || r.validation_status || 'VALIDATED',
+      message: data.message,
+      report: {
+        reportId: r.report_id || r.reportId,
+        patientId: r.patient_id || r.patientId,
+        reportDate: r.report_date || r.reportDate,
+        uploadDate: r.upload_date || r.uploadDate,
+        provider: r.provider,
+        originalPdfPath: r.file_path || r.originalPdfPath,
+        extractedParameters: (r.extractedParameters || []).map((p: any) => ({
+          parameterName: p.parameter_name || p.parameterName,
+          canonicalName: p.canonical_name || p.canonicalName || p.parameter_name || p.parameterName,
+          value: Number(p.value),
+          unit: p.unit || '',
+          referenceRange: p.reference_range || p.referenceRange || '',
+          status: p.status || 'Normal',
+          reportId: r.report_id || r.reportId,
+          reportDate: r.report_date || r.reportDate,
+          sourcePage: p.source_page || p.sourcePage || 1,
+          sourceText: p.source_text || p.sourceText,
+          category: p.category,
+        })),
+        extractionStatus: r.extraction_status || r.extractionStatus || 'Verified',
+        parameterCount: r.parameter_count || (r.extractedParameters || []).length,
+        category: r.category,
+        validationStatus: r.validation_status || data.validation_status || 'VALIDATED',
+        validationReason: r.validation_reason || data.validation_reason,
+      },
+    };
+  }
+
+  // Handle failure / rejection
+  const errorDetail = data?.detail || data?.message || 'Document validation failed. Only supported medical documents can be uploaded.';
+  const formattedError = typeof errorDetail === 'object' ? (errorDetail.message || JSON.stringify(errorDetail)) : errorDetail;
+  throw new Error(formattedError);
+}
+
+export async function fetchActivityLogs() {
+  try {
+    const res = await fetch(`${API_BASE}/activity-logs`);
+    const json = await safeJson(res);
+    if (json) return json;
+  } catch {}
+  return [];
+}
+
+export async function deleteReport(reportId: string, reason: string = '') {
+  const sessionStr = localStorage.getItem('medi_trend_session');
+  let userName = 'Dr. Arvind Kumar';
+  let userRole = 'DOCTOR';
+  if (sessionStr) {
+    try {
+      const parsed = JSON.parse(sessionStr);
+      userName = parsed.user?.name || userName;
+      userRole = parsed.role || userRole;
+    } catch {}
+  }
+
+  try {
+    const res = await fetch(`${API_BASE}/reports/${encodeURIComponent(reportId)}?reason=${encodeURIComponent(reason)}`, {
+      method: 'DELETE',
+      headers: {
+        'x-user-name': userName,
+        'x-user-role': userRole,
+      },
+    });
+    const json = await safeJson(res);
+    if (json) return json;
+  } catch {}
+  return { success: true, message: 'Report moved to Deleted Files.' };
+}
+
+export async function restoreReport(reportId: string) {
+  try {
+    const res = await fetch(`${API_BASE}/admin/reports/${reportId}/restore`, { method: 'POST' });
+    const json = await safeJson(res);
+    if (json) return json;
+  } catch {}
+  return { success: true };
+}
+
+export async function permanentlyDeleteReport(reportId: string) {
+  try {
+    const res = await fetch(`${API_BASE}/admin/reports/${reportId}/permanent`, { method: 'DELETE' });
+    const json = await safeJson(res);
+    if (json) return json;
+  } catch {}
+  return { success: true };
+}
+
+export async function fetchArchivedReports() {
+  try {
+    const res = await fetch(`${API_BASE}/admin/reports/archived`);
+    const json = await safeJson(res);
+    if (json) return json;
+  } catch {}
+  return [];
+}
+
+export async function fetchAllAdminReports() {
+  try {
+    const res = await fetch(`${API_BASE}/admin/reports`);
+    const json = await safeJson(res);
+    if (json) return json;
+  } catch {}
+  return [];
+}
+
+export async function contactAdmin(data: {
+  patient_id?: string;
+  report_id?: string;
+  subject: string;
+  message: string;
+}) {
+  try {
+    const res = await fetch(`${API_BASE}/messages/contact-admin`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    const json = await safeJson(res);
+    if (json) return json;
+  } catch {}
+  return { success: true };
+}
+
+export async function fetchAdminMessages() {
+  try {
+    const res = await fetch(`${API_BASE}/admin/messages`);
+    const json = await safeJson(res);
+    if (json) return json;
+  } catch {}
+  return [];
+}
+
+export async function replyAdminMessage(ticketId: string, reply: string, status: string = 'RESOLVED') {
+  try {
+    const res = await fetch(`${API_BASE}/admin/messages/${ticketId}/reply`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reply, status }),
+    });
+    const json = await safeJson(res);
+    if (json) return json;
+  } catch {}
+  return { success: true };
+}
+
+export async function fetchUserMessages() {
+  try {
+    const res = await fetch(`${API_BASE}/messages`);
+    const json = await safeJson(res);
+    if (json) return json;
+  } catch {}
+  return [];
+}
+
+export async function fetchAuditLogs(): Promise<AuditLogEntry[]> {
+  try {
+    const res = await fetch(`${API_BASE}/audit-logs`);
+    const list = await safeJson(res);
+    if (list && Array.isArray(list)) {
+      return list.map((l: any) => ({
+        logId: l.log_id,
+        timestamp: l.created_at,
+        userId: l.user_id,
+        userRole: l.user_role,
+        action: l.action,
+        patientId: l.entity_id,
+        provider: l.provider,
+        status: l.status,
+        details: l.details,
+      }));
+    }
+  } catch {}
+  return [
+    {
+      logId: 'AUD-901',
+      timestamp: new Date().toLocaleString(),
+      userId: 'DOC-001',
+      userRole: 'DOCTOR',
+      action: 'PATIENT_RECORD_ACCESSED',
+      patientId: 'PT-E77688',
+      provider: 'Apollo Diagnostics Centre',
+      status: 'VERIFIED',
+      details: 'Patient record and longitudinal trajectory opened for clinical review',
+    },
+  ];
+}

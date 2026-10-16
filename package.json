@@ -1,0 +1,12 @@
+{
+  "name": "medi-trend-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "npm --prefix client install && npm --prefix client run build",
+    "dev": "npm --prefix client run dev"
+  },
+  "devDependencies": {
+    "vite": "^8.3.0"
+  }
+}

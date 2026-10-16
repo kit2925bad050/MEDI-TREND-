@@ -1,0 +1,12 @@
+﻿.env
+.env.*
+!.env.example
+.venv/
+venv/
+node_modules/
+__pycache__/
+*.pyc
+.DS_Store
+
+.vercel/
+test_artifacts_audit/

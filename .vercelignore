@@ -1,0 +1,8 @@
+.vscode
+.gemini
+server/sample_pdfs
+server/uploaded_reports
+*.pyc
+__pycache__
+.pytest_cache
+*.tsbuildinfo
