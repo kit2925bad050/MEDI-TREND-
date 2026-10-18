@@ -5,6 +5,7 @@ import {
   fetchPatientReports,
   analyzeReports,
   logoutUser,
+  BACKEND_SESSION_TTL_MS,
 } from './services/api';
 import {
   PatientProfile,
@@ -96,6 +97,15 @@ export const AppContent: React.FC = () => {
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
+        if (
+          !parsed.token ||
+          typeof parsed.expiresAt !== 'number' ||
+          !Number.isFinite(parsed.expiresAt) ||
+          Date.now() >= parsed.expiresAt
+        ) {
+          localStorage.removeItem('medi_trend_session');
+          return;
+        }
         if (parsed.user && parsed.role) {
           if (parsed.user.avatarUrl && (parsed.user.avatarUrl.includes('unsplash') || parsed.user.avatarUrl.includes('placeholder'))) {
             parsed.user.avatarUrl = undefined;
@@ -256,6 +266,7 @@ export const AppContent: React.FC = () => {
       user: { id: userObj.id, name: userObj.name, email: userObj.email, avatarUrl: userObj.avatarUrl },
       role: userObj.role,
       token: userObj.token,
+      expiresAt: Date.now() + BACKEND_SESSION_TTL_MS,
     }));
     if (userObj.role === 'ADMIN') {
       navigate('/admin');

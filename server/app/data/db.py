@@ -22,6 +22,11 @@ except ImportError:
 # When DATABASE_URL is set (e.g. on Vercel with Supabase), use PostgreSQL.
 # Otherwise fall back to SQLite for local development.
 _USE_POSTGRES = bool(os.environ.get("DATABASE_URL"))
+if os.environ.get("VERCEL") == "1" and not _USE_POSTGRES:
+    raise RuntimeError(
+        "DATABASE_URL must point to the existing persistent PostgreSQL database on Vercel; "
+        "SQLite in /tmp cannot persist sessions or application data across serverless instances."
+    )
 if _USE_POSTGRES:
     import psycopg2
     from psycopg2.extras import RealDictCursor

@@ -21,6 +21,7 @@ import {
   changeAdminIdentity,
   fetchAdminSessions,
   revokeAllOtherAdminSessions,
+  BACKEND_SESSION_TTL_MS,
 } from '../../services/api';
 import { useLanguage } from '../../context/LanguageContext';
 
@@ -96,6 +97,7 @@ export const AdminSettingsPage: React.FC = () => {
           if (sessionStr) {
             const parsed = JSON.parse(sessionStr);
             parsed.token = res.token;
+            parsed.expiresAt = Date.now() + BACKEND_SESSION_TTL_MS;
             localStorage.setItem('medi_trend_session', JSON.stringify(parsed));
           }
         } catch {}
@@ -134,7 +136,18 @@ export const AdminSettingsPage: React.FC = () => {
 
   const handleRevokeAllSessions = async () => {
     try {
-      await revokeAllOtherAdminSessions();
+      const res = await revokeAllOtherAdminSessions();
+      if (!res.token) {
+        throw new Error('The server revoked sessions but did not return a replacement token.');
+      }
+      const sessionStr = localStorage.getItem('medi_trend_session');
+      if (!sessionStr) {
+        throw new Error('The active administrator session is missing. Please log in again.');
+      }
+      const parsed = JSON.parse(sessionStr);
+      parsed.token = res.token;
+      parsed.expiresAt = Date.now() + BACKEND_SESSION_TTL_MS;
+      localStorage.setItem('medi_trend_session', JSON.stringify(parsed));
       setSessionActionMsg(isTamil ? 'மற்ற அனைத்து அமர்வுகளும் வெற்றிகரமாக ரத்து செய்யப்பட்டன.' : 'All other active sessions revoked.');
       loadSessions();
       setTimeout(() => setSessionActionMsg(null), 3000);

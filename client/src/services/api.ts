@@ -18,6 +18,8 @@ export interface TokenApiResponse extends BaseApiResponse {
   token?: string;
 }
 
+export const BACKEND_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+
 export interface IdentityApiResponse extends BaseApiResponse {
   new_username?: string;
 }
@@ -484,7 +486,7 @@ export async function revokeAllOtherAdminSessions() {
     method: 'POST',
     headers: getAuthHeaders(),
   });
-  return safeJson(res);
+  return readApiResponse<TokenApiResponse>(res, 'Unable to revoke administrator sessions.');
 }
 
 export async function fetchAdminDashboardStats() {

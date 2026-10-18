@@ -46,31 +46,31 @@ export const AdminDashboardPage: React.FC = () => {
   const kpis = [
     {
       label: 'Registered Doctors',
-      value: stats?.total_doctors ?? 0,
+      value: stats?.total_doctors ?? null,
       icon: UserCheck,
       color: 'text-brand-600 bg-brand-50 dark:bg-brand-950/60',
     },
     {
       label: 'Clinical Staff',
-      value: stats?.total_staff ?? 0,
+      value: stats?.total_staff ?? null,
       icon: Users,
       color: 'text-cyan-600 bg-cyan-50 dark:bg-cyan-950/60',
     },
     {
       label: 'Active Patients',
-      value: stats?.total_patients ?? 0,
+      value: stats?.total_patients ?? null,
       icon: Users,
       color: 'text-indigo-600 bg-indigo-50 dark:bg-indigo-950/60',
     },
     {
       label: 'Medical Reports',
-      value: stats?.total_reports ?? 0,
+      value: stats?.total_reports ?? null,
       icon: FileText,
       color: 'text-emerald-600 bg-emerald-50 dark:bg-emerald-950/60',
     },
     {
       label: 'AI Analyses Run',
-      value: stats?.total_analyses ?? 0,
+      value: stats?.total_analyses ?? null,
       icon: Brain,
       color: 'text-purple-600 bg-purple-50 dark:bg-purple-950/60',
     },
@@ -125,7 +125,7 @@ export const AdminDashboardPage: React.FC = () => {
                 </div>
               </div>
               <div className="text-2xl font-extrabold text-slate-900 dark:text-white font-mono">
-                {kpi.value}
+                {kpi.value ?? '—'}
               </div>
             </div>
           );

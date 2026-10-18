@@ -25,8 +25,8 @@ Set the following in your Vercel project settings (or `.env` for local testing):
 # Required for PostgreSQL production mode
 DATABASE_URL=postgresql://postgres:[PASSWORD]@[HOST]:5432/postgres
 
-# Optional: set to '1' on Vercel if using SQLite fallback
-VERCEL=0
+# Vercel sets VERCEL=1 automatically. DATABASE_URL is required there;
+# do not configure a SQLite fallback for a serverless deployment.
 
 # AI provider keys (backend only — never expose to frontend)
 GEMINI_API_KEY=your_gemini_api_key
@@ -76,7 +76,7 @@ VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_[YOUR_KEY]
 The backend (`server/app/data/db.py`) checks the `DATABASE_URL` environment variable at import time:
 
 - **If `DATABASE_URL` is set:** Uses `psycopg2` to connect to Supabase PostgreSQL. All `?` placeholders in SQL are transparently converted to `$1`, `$2`, ... for PostgreSQL. Schema migrations check `information_schema.columns` before adding columns (idempotent).
-- **If `DATABASE_URL` is not set:** Uses `sqlite3` with a local `medi_trend.db` file. On Vercel (`VERCEL=1`), the file is stored in `/tmp` (ephemeral).
+- **If `DATABASE_URL` is not set locally:** Uses `sqlite3` with the local `medi_trend.db` file. On Vercel (`VERCEL=1`), the API fails at startup instead of silently using ephemeral `/tmp` storage.
 
 ## Data Seeding
 
@@ -90,8 +90,8 @@ These seeds are idempotent — running on an existing database will not duplicat
 
 ## Migration Risks & Limitations
 
-### 1. Ephemeral Storage on Vercel (SQLite fallback)
-If `DATABASE_URL` is not set and `VERCEL=1`, SQLite stores data in `/tmp`, which is ephemeral. All data is lost when the serverless instance is recycled. **Always set `DATABASE_URL` for production.**
+### 1. Persistent database required on Vercel
+The application refuses to start its API on Vercel without `DATABASE_URL`. SQLite under `/tmp` is ephemeral and may differ between serverless instances, which makes login sessions invalid between requests and causes dashboard metrics to read from an empty database. Set `DATABASE_URL` to the existing persistent PostgreSQL database containing the application records. Do not point it at a newly initialized empty database if existing records must be preserved.
 
 ### 2. Boolean type differences
 SQLite stores boolean-like columns as `INTEGER (0/1)`. PostgreSQL stores them as `BOOLEAN (true/false)`. Python's `bool` is a subclass of `int`, so `True == 1` and `False == 0` in comparisons. JSON serialization differs (`true` vs `1`), but most frontend checks use truthiness, which works for both.
