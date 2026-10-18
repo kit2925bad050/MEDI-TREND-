@@ -1,4 +1,5 @@
 import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
 import { defineConfig, loadEnv } from 'vite'
 
 export default defineConfig(({ mode }) => {
@@ -8,7 +9,7 @@ export default defineConfig(({ mode }) => {
     .replace(/\/+$/, '')
 
   return {
-    plugins: [react()],
+    plugins: [tailwindcss(), react()],
     server: {
       proxy: {
         '/api': {

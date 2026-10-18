@@ -102,6 +102,19 @@ Web Application opens at: `http://localhost:5173`
 
 Local Vite development forwards `/api` requests to the backend on port 8000. Set `VITE_API_BASE_URL` only when the frontend and backend are hosted separately. SQLite records are stored in `server/app/data/medi_trend.db` and uploaded medical documents in `server/uploaded_reports`; both locations must use persistent storage in production. Set `CORS_ORIGINS` to a comma-separated list of trusted frontend origins for separate hosting.
 
+### Deploying to Vercel
+
+Import the repository into Vercel with the project root as the repository root. The checked-in `vercel.json` builds the Vite client and routes `/api/*` to the FastAPI function in `api/index.py`.
+
+Configure these environment variables in the Vercel project settings before deploying:
+
+- `DATABASE_URL`: Supabase PostgreSQL connection string (use the provider's pooled connection string when available).
+- `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and `SUPABASE_STORAGE_BUCKET`: enable persistent uploaded-report storage. Keep the service-role key server-side; never use a `VITE_` prefix for it.
+- `CORS_ORIGINS`: the deployed frontend origin, for example `https://your-project.vercel.app`.
+- `GEMINI_API_KEY` and/or `OPENROUTER_API_KEY` / `GROK_API_KEY`: AI-backed summaries and OCR; the deterministic analysis path remains available without AI credentials.
+
+Leave `VITE_API_URL` unset when the frontend and API are deployed in this same Vercel project. SQLite and local file storage are development fallbacks only; Vercel's filesystem is ephemeral, so production must use PostgreSQL and persistent object storage.
+
 ---
 
 ## ⚙️ Environment Configuration

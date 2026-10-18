@@ -6,3 +6,5 @@ requests>=2.32.0
 pdfplumber>=0.11.0
 reportlab>=4.2.0
 pypdfium2>=4.30.0
+psycopg2-binary>=2.9.9
+supabase>=2.0.0

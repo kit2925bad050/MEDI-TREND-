@@ -64,7 +64,7 @@ async function optimizeImageForUpload(imageFile: File, maxDimension = 2400): Pro
         ctx.fillStyle = '#FFFFFF';
         ctx.fillRect(0, 0, width, height);
         ctx.drawImage(img, 0, 0, width, height);
-        
+
         canvas.toBlob(
           (blob) => {
             if (blob && blob.size < imageFile.size) {
@@ -311,21 +311,6 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
         });
       }
 
-      let detectedContent = 'Non-medical or unverified document';
-      if (rawMsg.toLowerCase().includes('academic') || rawMsg.toLowerCase().includes('calendar') || rawMsg.toLowerCase().includes('semester')) {
-        detectedContent = isTamil ? 'பல்கலைக்கழக கல்வி நாட்காட்டி / நேர அட்டவணை' : 'University academic calendar / timetable';
-      } else if (rawMsg.toLowerCase().includes('resume') || rawMsg.toLowerCase().includes('curriculum vitae')) {
-        detectedContent = isTamil ? 'மென்பொருள் பொறியாளர் சுயவிவரம் (Resume / CV)' : 'Software developer resume / CV';
-      } else if (rawMsg.toLowerCase().includes('invoice') || rawMsg.toLowerCase().includes('gstin') || rawMsg.toLowerCase().includes('tax')) {
-        detectedContent = isTamil ? 'வணிக விற்பனை வரி விலைப்பட்டியல் (Invoice)' : 'Commercial retail tax invoice';
-      } else if (rawMsg.toLowerCase().includes('audio') || rawMsg.toLowerCase().includes('video') || rawMsg.toLowerCase().includes('unsupported')) {
-        detectedContent = isTamil ? 'ஆவணமற்ற மீடியா கோப்பு (Audio / Video)' : 'Non-document media stream';
-      } else if (rawMsg.toLowerCase().includes('corrupted') || rawMsg.toLowerCase().includes('signature')) {
-        detectedContent = isTamil ? 'சிதைந்த / பழுதடைந்த கோப்பு' : 'Malformed / corrupted PDF binary';
-      } else if (e.identityStatus === 'MISMATCH' || e.identityStatus === 'UNVERIFIED') {
-        detectedContent = isTamil ? 'நோயாளி விவரமற்ற பொருத்தம் (Patient Identity Mismatch)' : 'Patient Identity Mismatch';
-=======
-
       if (e.isPatientNotFound) {
         setErrorMsg(e.message || 'Medical document verified, but patient profile not found in database.');
         setErrorDetails({
@@ -340,7 +325,21 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
           reason: e.message
         });
         return;
->>>>>>> origin/main
+      }
+
+      let detectedContent = 'Non-medical or unverified document';
+      if (rawMsg.toLowerCase().includes('academic') || rawMsg.toLowerCase().includes('calendar') || rawMsg.toLowerCase().includes('semester')) {
+        detectedContent = isTamil ? 'பல்கலைக்கழக கல்வி நாட்காட்டி / நேர அட்டவணை' : 'University academic calendar / timetable';
+      } else if (rawMsg.toLowerCase().includes('resume') || rawMsg.toLowerCase().includes('curriculum vitae')) {
+        detectedContent = isTamil ? 'மென்பொருள் பொறியாளர் சுயவிவரம் (Resume / CV)' : 'Software developer resume / CV';
+      } else if (rawMsg.toLowerCase().includes('invoice') || rawMsg.toLowerCase().includes('gstin') || rawMsg.toLowerCase().includes('tax')) {
+        detectedContent = isTamil ? 'வணிக விற்பனை வரி விலைப்பட்டியல் (Invoice)' : 'Commercial retail tax invoice';
+      } else if (rawMsg.toLowerCase().includes('audio') || rawMsg.toLowerCase().includes('video') || rawMsg.toLowerCase().includes('unsupported')) {
+        detectedContent = isTamil ? 'ஆவணமற்ற மீடியா கோப்பு (Audio / Video)' : 'Non-document media stream';
+      } else if (rawMsg.toLowerCase().includes('corrupted') || rawMsg.toLowerCase().includes('signature')) {
+        detectedContent = isTamil ? 'சிதைந்த / பழுதடைந்த கோப்பு' : 'Malformed / corrupted PDF binary';
+      } else if (e.identityStatus === 'MISMATCH' || e.identityStatus === 'UNVERIFIED') {
+        detectedContent = isTamil ? 'நோயாளி விவரமற்ற பொருத்தம் (Patient Identity Mismatch)' : 'Patient Identity Mismatch';
       }
 
       if (e.isDuplicate) {
@@ -354,7 +353,7 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
         });
         return;
       }
-      
+
       if (e.isIdentityMismatch || (e.message && e.message.includes('MISMATCH'))) {
         const mismatchTitle = e.title || e.message || 'PATIENT IDENTITY MISMATCH - INVALID DOCUMENT FOR THIS PATIENT';
         setErrorMsg(mismatchTitle);
@@ -411,13 +410,13 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
         return;
       }
 
-      const rawMsg = e.message || 'The uploaded file could not be processed.';
-      setErrorMsg(rawMsg);
+      const fallbackMessage = e.message || 'The uploaded file could not be processed.';
+      setErrorMsg(fallbackMessage);
       setErrorDetails({
-        type: rawMsg.includes('500') || rawMsg.toLowerCase().includes('server processing error') ? 'SERVER_ERROR' : 'INVALID_MEDICAL_DOCUMENT',
+        type: fallbackMessage.includes('500') || fallbackMessage.toLowerCase().includes('server processing error') ? 'SERVER_ERROR' : 'INVALID_MEDICAL_DOCUMENT',
         title: isTamil ? 'செயலாக்கப் பிழை' : 'PROCESSING ERROR',
         detected: isTamil ? 'சர்வர் செயலாக்க பிழை' : 'Server processing exception',
-        reason: rawMsg
+        reason: fallbackMessage
       });
     }
   };
@@ -471,8 +470,8 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
           {/* Rejection Warning / Patient Resolution Modal Card */}
           {errorMsg && (
             <div className={`p-5 rounded-2xl ${
-              errorDetails?.type === 'PATIENT_NOT_FOUND' 
-                ? 'bg-amber-50 dark:bg-amber-950/60 border border-amber-200 dark:border-amber-900/60 text-amber-800 dark:text-amber-200' 
+              errorDetails?.type === 'PATIENT_NOT_FOUND'
+                ? 'bg-amber-50 dark:bg-amber-950/60 border border-amber-200 dark:border-amber-900/60 text-amber-800 dark:text-amber-200'
                 : errorDetails?.type === 'DUPLICATE_REPORT'
                 ? 'bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-900/60 text-indigo-800 dark:text-indigo-200'
                 : 'bg-red-50 dark:bg-red-950/60 border border-red-200 dark:border-red-900/60 text-red-700 dark:text-red-300'
@@ -883,7 +882,7 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
                 type="text"
                 value={reportDate}
                 onChange={(e) => setReportDate(e.target.value)}
-          <<<<<<< HEAD      placeholder="Auto-detected from document content"
+                placeholder="Auto-detected from document content"
                 className="w-full px-3.5 py-2 text-xs rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 font-medium"
               />
             </div>

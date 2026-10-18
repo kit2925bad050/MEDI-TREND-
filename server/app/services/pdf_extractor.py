@@ -15,7 +15,6 @@ from .numerical_validator import (
     PARAMETER_CONFIGS
 )
 
-<<<<<<< HEAD
 # Patterns that indicate a line contains patient info or report metadata, not a lab parameter
 NON_PARAMETER_PATTERNS = [
     r"patient\s*(name|id|number|age|gender|sex|dob|date of birth)",
@@ -70,29 +69,14 @@ def is_parameter_line(line: str) -> bool:
 
 def extract_parameters_from_pdf(
     pdf_path: str,
-    report_id: str,
-    report_date: str,
+    report_id: str = "REP-001",
+    report_date: str = "",
     raw_text: Optional[str] = None
 ) -> List[ParameterData]:
     """
     Real extraction engine that parses PDF pages, extracts tabular laboratory rows,
     identifies parameters, units, reference ranges, and preserves source page numbers.
     Includes date filtering and confidence scoring.
-=======
-def extract_parameters_from_pdf(
-    pdf_path: str,
-    report_id: str = "REP-001",
-    report_date: str = "",
-    raw_text: Optional[str] = None
-) -> List[ParameterData]:
-    """
-    Real clinical parameter extraction engine:
-    1. Parses PDF pages and tables (digital layout).
-    2. Uses OCR/text fallback if scanned or plain text.
-    3. Normalizes parameter names and units.
-    4. Rejects non-parameter metadata and dates (e.g. 12/05/2026 will NEVER become 12.0).
-    5. Preserves source page numbers and original text snippets.
->>>>>>> origin/main
     """
     extracted: List[ParameterData] = []
     seen_params = set()
@@ -100,7 +84,6 @@ def extract_parameters_from_pdf(
     if not os.path.exists(pdf_path) and not raw_text:
         return extracted
 
-<<<<<<< HEAD
     def _add_parameter(
         param_name: str,
         raw_val: str,
@@ -152,9 +135,6 @@ def extract_parameters_from_pdf(
         ))
 
     # 1. Try digital Table extraction if PDF exists
-=======
-    # 1. Digital Table extraction if PDF exists
->>>>>>> origin/main
     if os.path.exists(pdf_path):
         try:
             with pdfplumber.open(pdf_path) as pdf:
@@ -169,21 +149,8 @@ def extract_parameters_from_pdf(
                             unit_cell = str(row[2] or "").strip() if len(row) > 2 else ""
                             ref_range = str(row[3] or "").strip() if len(row) > 3 else ""
 
-<<<<<<< HEAD
                             num_match = re.search(r"[-+]?\d*\.?\d+", raw_val)
-                            if num_match and param_name and is_parameter_line(param_name):
-=======
-                            # Check validity of parameter name
-                            if not is_valid_parameter_name(param_cell):
-                                continue
-
-                            # Check value
-                            num_match = re.search(r"^[-+]?\d*\.?\d+", raw_val)
-                            if not num_match:
-                                num_match = re.search(r"[-+]?\d*\.?\d+", raw_val)
-
-                            if num_match:
->>>>>>> origin/main
+                            if num_match and param_cell and is_parameter_line(param_cell):
                                 try:
                                     val_float = float(num_match.group(0))
                                     key, canonical, cfg = normalize_parameter_name(param_cell)
@@ -214,19 +181,9 @@ def extract_parameters_from_pdf(
                         line_clean = line.strip()
                         if not line_clean or not is_parameter_line(line_clean):
                             continue
-<<<<<<< HEAD
                         m = re.search(
                             r"([A-Za-z\s\(\)\-\/\d]{3,35})\s+([0-9]+\.?[0-9]*)\s*([a-zA-Z\/\%]*)\s*([<\>\d\.\-\s]*)",
                             line_clean
-=======
-
-                        # Extract potential laboratory key-value pairs
-                        # e.g. "Total Cholesterol: 210.0 mg/dL (Ref: < 200)"
-                        m = re.search(
-                            r"([A-Za-z0-9\s\(\)\/\-]{2,40})[\:\s]+([0-9]+\.?[0-9]*)\s*([a-zA-Z\/\%]*)\s*\(?(?:ref\:?)?\s*([<\>\d\.\-\s]*)\)?",
-                            line_clean,
-                            re.IGNORECASE
->>>>>>> origin/main
                         )
                         if m:
                             p_name = m.group(1).strip()
@@ -277,19 +234,10 @@ def extract_parameters_from_pdf(
                     line_clean = line.strip()
                     if not line_clean or not is_parameter_line(line_clean):
                         continue
-<<<<<<< HEAD
                     clean_for_regex = re.sub(r"[\*\#\_\-]", " ", line_clean).strip()
                     m = re.search(
                         r"([A-Za-z\s\(\)\/\d]{3,35})[\:\s]+([0-9]+\.?[0-9]*)\s*([a-zA-Z\/\%]*)\s*\(?(?:ref\:?)?\s*([<\>\d\.\-\s]*)\)?",
                         clean_for_regex,
-=======
-
-                    # Clean OCR markdown artifacts like asterisks
-                    clean_line = re.sub(r"[\*\#\_]", " ", line_clean).strip()
-                    m = re.search(
-                        r"([A-Za-z0-9\s\(\)\/\-]{2,40})[\:\s]+([0-9]+\.?[0-9]*)\s*([a-zA-Z\/\%]*)\s*\(?(?:ref\:?)?\s*([<\>\d\.\-\s]*)\)?",
-                        clean_line,
->>>>>>> origin/main
                         re.IGNORECASE
                     )
                     if m:
@@ -343,7 +291,6 @@ def extract_parameters_from_pdf(
 
     return extracted
 
-<<<<<<< HEAD
 
 def _extract_parameters_via_ai(
     raw_text: str,
@@ -352,11 +299,6 @@ def _extract_parameters_via_ai(
 ) -> List[ParameterData]:
     """Uses Gemini / OpenRouter AI to extract structured parameters from raw document text verbatim."""
     from ..providers.ai_provider import GEMINI_API_KEY, OPENROUTER_API_KEY
-=======
-def _extract_parameters_via_ai(raw_text: str, report_id: str, report_date: str) -> List[ParameterData]:
-    """Uses Gemini / Multi-Provider AI to extract structured parameters from raw document text verbatim."""
-    from ..providers.ai_provider import GEMINI_API_KEY, OPENROUTER_API_KEY, GROK_API_KEY
->>>>>>> origin/main
     import requests
     import json
 
@@ -367,16 +309,10 @@ Extract every genuine laboratory test parameter and its observed numeric value, 
 
 CRITICAL RULES:
 1. ONLY extract laboratory tests that are explicitly present in the text with an observed numeric value.
-<<<<<<< HEAD
 2. NEVER invent or simulate parameters or numbers.
 3. NEVER extract dates, patient names, patient IDs, report IDs, doctor names, or report metadata as parameters.
 4. NEVER extract "Report Date", "Collection Date", "Date of Birth", "Age", "Gender", or similar fields as parameters.
 5. If no numerical lab tests are found, return an empty array `[]`.
-=======
-2. NEVER extract dates, times, patient IDs, doctor names, page numbers, or billing info as tests.
-3. NEVER invent or simulate parameters or numbers.
-4. If no numerical lab tests are found, return an empty array `[]`.
->>>>>>> origin/main
 
 Document Text:
 \"\"\"
@@ -491,7 +427,6 @@ Output STRICT JSON format:
             pass
 
     return []
-<<<<<<< HEAD
 
 
 def generate_sample_hospital_pdf(
@@ -606,5 +541,3 @@ def generate_sample_hospital_pdf(
 
     doc.build(elements)
     return file_path
-=======
->>>>>>> origin/main

@@ -71,11 +71,24 @@ class MedicalDocumentVerificationSuite(unittest.TestCase):
 
     def setUp(self):
         self.client = TestClient(app)
+        doctor_name = "Verification Test Doctor"
+        self.test_doctor = db.create_doctor({
+            "full_name": doctor_name,
+            "email": f"verification.{uuid.uuid4().hex}@testlab.org",
+        })
+        self.session_token = db.create_session(
+            self.test_doctor["doctor_id"], "DOCTOR", doctor_name
+        )
         self.auth_headers = {
+            "Authorization": f"Bearer {self.session_token}",
             "x-user-role": "DOCTOR",
-            "x-user-name": "Dr. Arvind Kumar",
-            "x-user-id": "DOC-001"
+            "x-user-name": doctor_name,
+            "x-user-id": self.test_doctor["doctor_id"],
         }
+
+    def tearDown(self):
+        db.revoke_session(self.session_token)
+        db.delete_doctor(self.test_doctor["doctor_id"])
 
     # =========================================================================
     # Scenario 1: Digital laboratory PDF with embedded text
@@ -497,6 +510,64 @@ class MedicalDocumentVerificationSuite(unittest.TestCase):
         finally:
             db.delete_patient(pid)
 
+    def test_patient_profile_edit_preserves_id_and_report_history(self):
+        patient = db.create_patient({
+            "full_name": "Patient Before Edit",
+            "age": 40,
+            "gender": "Female",
+            "phone": "+91 91111 22222",
+        })
+        patient_id = patient["patient_id"]
+        report_id = f"REP-EDIT-{uuid.uuid4().hex[:8].upper()}"
+        try:
+            db.save_report_with_parameters(
+                {
+                    "report_id": report_id,
+                    "patient_id": patient_id,
+                    "report_date": "2026-03-01",
+                    "upload_date": "2026-03-01 10:00:00",
+                    "provider": "Regression Lab",
+                    "file_path": "",
+                    "category": "Biochemistry",
+                    "extraction_status": "Verified",
+                    "uploaded_by": self.test_doctor["doctor_id"],
+                    "document_hash": uuid.uuid4().hex,
+                },
+                [{
+                    "parameter_name": "Fasting Blood Glucose",
+                    "canonical_name": "Fasting Blood Glucose",
+                    "value": 92,
+                    "unit": "mg/dL",
+                    "reference_range": "70 - 99",
+                    "status": "Normal",
+                }],
+            )
+
+            updated = db.update_patient(
+                patient_id,
+                {
+                    "full_name": "Patient After Edit",
+                    "age": 41,
+                    "gender": "Female",
+                    "phone": "+91 93333 44444",
+                    "email": "updated.patient@testlab.org",
+                    "blood_group": "A+",
+                    "assigned_doctor_id": self.test_doctor["doctor_id"],
+                },
+            )
+
+            self.assertEqual(updated["patient_id"], patient_id)
+            self.assertEqual(updated["full_name"], "Patient After Edit")
+            self.assertEqual(updated["age"], 41)
+            self.assertEqual(updated["assigned_doctor_id"], self.test_doctor["doctor_id"])
+            reports = db.get_patient_reports(patient_id)
+            self.assertEqual([report["report_id"] for report in reports], [report_id])
+            parameters = db.get_report_parameters(report_id)
+            self.assertEqual(len(parameters), 1)
+            self.assertEqual(parameters[0]["value"], 92)
+        finally:
+            db.delete_patient(patient_id)
+
     # =========================================================================
     # Scenario 14: AI provider failure and fallback mechanism
     # =========================================================================
@@ -579,23 +650,25 @@ class MedicalDocumentVerificationSuite(unittest.TestCase):
     # =========================================================================
     def test_16_unauthorized_patient_access_blocked(self):
         """Patient accounts attempting to upload documents to another patient profile are blocked with 403."""
-        # User is authenticated as patient PT-USER-ALPHA
-        patient_headers = {
-            "x-user-role": "PATIENT",
-            "x-user-name": "Alpha Patient",
-            "x-user-id": "PT-USER-ALPHA"
-        }
-
-        dummy_pdf = generate_pdf_bytes("LAB", ["Patient Name: Beta Patient", "HbA1c: 6.5 %"])
-
-        # Attempt to upload to PT-USER-BETA
-        res = self.client.post(
-            "/api/patients/PT-USER-BETA/upload",
-            files={"file": ("lab.pdf", dummy_pdf, "application/pdf")},
-            headers=patient_headers
-        )
-        self.assertEqual(res.status_code, 403)
-        self.assertIn("Forbidden", res.text)
+        patient = db.create_patient({
+            "full_name": "Alpha Patient",
+            "age": 40,
+            "gender": "Male",
+            "phone": "+91 90000 10000",
+        })
+        token = db.create_session(patient["patient_id"], "PATIENT", "Alpha Patient")
+        try:
+            dummy_pdf = generate_pdf_bytes("LAB", ["Patient Name: Beta Patient", "HbA1c: 6.5 %"])
+            res = self.client.post(
+                "/api/patients/PT-USER-BETA/upload",
+                files={"file": ("lab.pdf", dummy_pdf, "application/pdf")},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            self.assertEqual(res.status_code, 403)
+            self.assertIn("Forbidden", res.text)
+        finally:
+            db.revoke_session(token)
+            db.delete_patient(patient["patient_id"])
 
     # =========================================================================
     # Scenario 17: Extraction failure without fabricated success

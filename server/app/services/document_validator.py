@@ -463,7 +463,7 @@ def classify_medical_document(text: str = "", filename: str = "", ocr_used: bool
         actual_text = str(text or "")
 
     actual_filename = str(filename or "")
-    
+
     try:
         if len(actual_text) < 400 and (os.path.exists(actual_text) or actual_text.endswith(".pdf") or actual_text.endswith(".png") or actual_text.endswith(".jpg")):
             target_path = actual_text
@@ -672,7 +672,6 @@ def classify_medical_document(text: str = "", filename: str = "", ocr_used: bool
         "ocr_used": ocr_used
     }
 
-<<<<<<< HEAD
 def normalize_patient_name(name: str) -> str:
     """Normalize patient name for comparison: lowercase, strip titles, handle initials, collapse whitespace."""
     if not name:
@@ -936,6 +935,7 @@ def validate_patient_identity(
     # Determine status
     if conflicts:
         result["status"] = "MISMATCH"
+        result["error_code"] = "PATIENT_IDENTITY_MISMATCH"
         result["details"] = (
             f"PATIENT IDENTITY MISMATCH — INVALID DOCUMENT FOR THIS PATIENT. "
             f"Registered patient: {expected_patient_name}. "
@@ -962,6 +962,7 @@ def validate_patient_identity(
         )
     else:
         result["status"] = "MISMATCH"
+        result["error_code"] = "PATIENT_NAME_MISMATCH"
         result["details"] = (
             f"PATIENT IDENTITY MISMATCH — INVALID DOCUMENT FOR THIS PATIENT. "
             f"Registered patient: {expected_patient_name}. "
@@ -969,13 +970,3 @@ def validate_patient_identity(
         )
 
     return result
-=======
-def validate_patient_identity(expected_patient_name: str, extracted_text: str, patient_dict: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """
-    Connects to the strict medical patient identity verification engine.
-    """
-    from .identity_verifier import verify_patient_identity
-    pat_payload = patient_dict or {"full_name": expected_patient_name, "patient_id": ""}
-    return verify_patient_identity(pat_payload, extracted_text)
-
->>>>>>> origin/main

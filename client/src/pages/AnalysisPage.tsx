@@ -16,16 +16,8 @@ import {
   ShieldAlert,
   CheckSquare,
   Square,
-<<<<<<< HEAD
-  ShieldAlert,
   Info,
   Clock,
-=======
-  Languages,
-  Info,
-  Calendar,
-  Building2,
->>>>>>> origin/main
 } from 'lucide-react';
 import { EmptyState } from '../components/common/EmptyState';
 import { KeyParametersTable } from '../components/KeyParametersTable';
@@ -170,15 +162,9 @@ export const AnalysisPage: React.FC<AnalysisPageProps> = ({
 
         <button
           onClick={onRunAnalysis}
-<<<<<<< HEAD
           disabled={selectedReportIds.length < 2 || isAnalyzing || hasMismatch}
           className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold text-xs shadow-md transition ${
             selectedReportIds.length >= 2 && !isAnalyzing && !hasMismatch
-=======
-          disabled={selectedReportIds.length === 0 || isAnalyzing}
-          className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold text-xs shadow-md transition ${
-            selectedReportIds.length >= 1 && !isAnalyzing
->>>>>>> origin/main
               ? 'bg-brand-600 hover:bg-brand-700 text-white shadow-brand-600/30'
               : 'bg-slate-200 dark:bg-slate-800 text-slate-400 cursor-not-allowed'
           }`}
@@ -255,7 +241,6 @@ export const AnalysisPage: React.FC<AnalysisPageProps> = ({
           {reports.map((r) => {
             const isMismatched = r.identityStatus === 'IDENTITY_MISMATCH';
             const isChecked = selectedReportIds.includes(r.reportId);
-<<<<<<< HEAD
             const identity = getIdentityBadge(r.identityVerificationStatus);
             const isMismatch = r.identityVerificationStatus === 'MISMATCH';
             return (
@@ -268,21 +253,6 @@ export const AnalysisPage: React.FC<AnalysisPageProps> = ({
                     : isMismatch
                       ? 'bg-rose-50/50 dark:bg-rose-900/10 border-rose-200 dark:border-rose-800'
                       : 'bg-slate-50 dark:bg-slate-800/60 border-slate-200 dark:border-slate-700 hover:border-slate-300'
-=======
-
-            return (
-              <div
-                key={r.reportId}
-                onClick={() => {
-                  if (!isMismatched) onToggleReportSelect(r.reportId);
-                }}
-                className={`p-3.5 rounded-xl border transition-all select-none ${
-                  isMismatched
-                    ? 'bg-red-50/50 dark:bg-red-950/20 border-red-200 dark:border-red-900/40 opacity-70 cursor-not-allowed'
-                    : isChecked
-                    ? 'bg-brand-50/70 dark:bg-brand-950/50 border-brand-400 dark:border-brand-600 ring-2 ring-brand-500/20 shadow-sm cursor-pointer'
-                    : 'bg-slate-50 dark:bg-slate-800/60 border-slate-200 dark:border-slate-700 hover:border-slate-300 cursor-pointer'
->>>>>>> origin/main
                 }`}
               >
                 <div className="flex items-center justify-between mb-2">
@@ -342,7 +312,6 @@ export const AnalysisPage: React.FC<AnalysisPageProps> = ({
       {/* Step 2: Clinical Intelligence & Parameter Matrix Results */}
       {analysisResult && (
         <div className="space-y-6">
-<<<<<<< HEAD
           {/* Analysis Status Bar */}
           <div className="p-3.5 rounded-xl border flex items-center justify-between gap-3 text-xs">
             <div className="flex items-center gap-2">
@@ -356,19 +325,6 @@ export const AnalysisPage: React.FC<AnalysisPageProps> = ({
               <span>Status: </span>
               <span className={`font-bold ${getAnalysisStatusColor(analysisResult.analysisStatus)}`}>
                 {analysisResult.analysisStatus}
-=======
-          {/* Active Clinical Analysis Status Bar */}
-          <div className="p-4 rounded-2xl bg-slate-900 text-white flex flex-wrap items-center justify-between gap-3 text-xs shadow-md">
-            <div className="flex items-center gap-2.5">
-              <Cpu className="w-4 h-4 text-cyan-400" />
-              <span>
-                Status:{' '}
-                <b className="text-emerald-400">
-                  {analysisResult.comparisons.length === 0
-                    ? 'Single-Report Clinical Intelligence Evaluation'
-                    : `Longitudinal Multi-Document Comparison (${analysisResult.selectedReportIds.length} Reports)`}
-                </b>
->>>>>>> origin/main
               </span>
             </div>
 
@@ -398,91 +354,12 @@ export const AnalysisPage: React.FC<AnalysisPageProps> = ({
             </div>
           </div>
 
-<<<<<<< HEAD
           {analysisResult.analysisStatus === 'Patient Identity Mismatch' && (
             <div className="p-4 rounded-xl border-rose-200 bg-rose-50 text-rose-700 text-sm">
               <p><strong>Analysis blocked:</strong> One or more reports have a patient identity mismatch and cannot be included in clinical comparison.</p>
               <p>Please upload the correct documents for this patient or contact the administrator for manual review.</p>
             </div>
           )}
-=======
-          {/* Bilingual English & Tamil Clinical Summary Cards */}
-          <div className="bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200/80 dark:border-slate-800 shadow-sm space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
-              <div className="flex items-center gap-2">
-                <Languages className="w-4 h-4 text-brand-600 dark:text-brand-400" />
-                <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-                  Clinical Findings Summary (English & தமிழ்)
-                </h3>
-              </div>
-
-              <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl text-[11px] font-semibold">
-                <button
-                  onClick={() => setSummaryLang('both')}
-                  className={`px-2.5 py-1 rounded-lg transition ${
-                    summaryLang === 'both' ? 'bg-white dark:bg-slate-900 shadow-sm text-slate-900 dark:text-white' : 'text-slate-500'
-                  }`}
-                >
-                  Both
-                </button>
-                <button
-                  onClick={() => setSummaryLang('en')}
-                  className={`px-2.5 py-1 rounded-lg transition ${
-                    summaryLang === 'en' ? 'bg-white dark:bg-slate-900 shadow-sm text-slate-900 dark:text-white' : 'text-slate-500'
-                  }`}
-                >
-                  English
-                </button>
-                <button
-                  onClick={() => setSummaryLang('ta')}
-                  className={`px-2.5 py-1 rounded-lg transition ${
-                    summaryLang === 'ta' ? 'bg-white dark:bg-slate-900 shadow-sm text-slate-900 dark:text-white' : 'text-slate-500'
-                  }`}
-                >
-                  தமிழ்
-                </button>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {(summaryLang === 'both' || summaryLang === 'en') && (
-                <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/70 dark:border-slate-700/60 space-y-2">
-                  <div className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-brand-500"></span>
-                    <span>English Clinical Summary</span>
-                  </div>
-                  <ul className="text-xs text-slate-700 dark:text-slate-300 space-y-1.5 list-disc list-inside leading-relaxed">
-                    {analysisResult.englishSummary.map((item, idx) => (
-                      <li key={idx}>{item}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-
-              {(summaryLang === 'both' || summaryLang === 'ta') && (
-                <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/70 dark:border-slate-700/60 space-y-2">
-                  <div className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-purple-500"></span>
-                    <span>தமிழ் மருத்துவச் சுருக்கம்</span>
-                  </div>
-                  <ul className="text-xs text-slate-700 dark:text-slate-300 space-y-1.5 list-disc list-inside leading-relaxed">
-                    {analysisResult.tamilSummary.map((item, idx) => (
-                      <li key={idx}>{item}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </div>
-
-            {/* Medical Cautionary Disclaimer */}
-            <div className="p-3 rounded-xl bg-blue-50/60 dark:bg-blue-950/30 border border-blue-200/60 dark:border-blue-900/40 text-[11px] text-blue-800 dark:text-blue-300 flex items-start gap-2">
-              <Info className="w-4 h-4 flex-shrink-0 mt-0.5 text-blue-600 dark:text-blue-400" />
-              <p>
-                <b>Clinical Guidance Note:</b> MEDI-TREND AI provides clinical decision support grounded strictly in laboratory reference standards. It does not independently establish a definitive medical diagnosis. Clinical correlation, patient history, and direct physician assessment are required.
-              </p>
-            </div>
-          </div>
->>>>>>> origin/main
 
           {/* Full Key Parameters Comparison Table */}
           {analysisResult.keyParameters.length > 0 && (

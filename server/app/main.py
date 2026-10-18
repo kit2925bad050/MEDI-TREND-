@@ -132,6 +132,21 @@ class CreateDoctorRequest(BaseModel):
             raise ValueError(message)
         return value
 
+class UpdateDoctorRequest(BaseModel):
+    full_name: str = Field(min_length=2, max_length=120)
+    email: str = Field(min_length=3, max_length=254)
+    phone: Optional[str] = ""
+    specialization: Optional[str] = "General Medicine"
+    department: Optional[str] = "Cardiology"
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, value: str) -> str:
+        value = value.strip().lower()
+        if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", value):
+            raise ValueError("Enter a valid email address.")
+        return value
+
 class CreateStaffRequest(BaseModel):
     full_name: str = Field(min_length=2, max_length=120)
     email: str = Field(min_length=3, max_length=254)
@@ -157,17 +172,10 @@ class CreateStaffRequest(BaseModel):
         return value
 
 class CreatePatientRequest(BaseModel):
-<<<<<<< HEAD
     full_name: str = Field(min_length=2, max_length=120)
     age: int = Field(ge=0, le=130)
     gender: str = Field(min_length=1, max_length=32)
     phone: str = Field(min_length=1, max_length=32)
-=======
-    full_name: str
-    age: int
-    gender: Optional[str] = "Male"
-    phone: Optional[str] = ""
->>>>>>> origin/main
     email: Optional[str] = ""
     blood_group: Optional[str] = "O+"
     assigned_doctor_id: Optional[str] = "Dr. Arvind Kumar"
@@ -178,6 +186,9 @@ class CreatePatientRequest(BaseModel):
         if value and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", value.strip()):
             raise ValueError("Enter a valid email address.")
         return value.strip().lower() if value else value
+
+class UpdatePatientRequest(CreatePatientRequest):
+    pass
 
 class UpdateAvatarRequest(BaseModel):
     avatar_url: Optional[str] = None
@@ -239,7 +250,6 @@ def extract_token_from_request(request: Request) -> Optional[str]:
 
 def get_current_user_and_role(request: Request) -> Dict[str, Any]:
     """
-<<<<<<< HEAD
     Backend Authorization (hardened):
     Identity is derived ONLY from a backend-issued session token validated against the
     active_sessions table. Client-supplied headers (x-user-role / x-user-name) are NEVER
@@ -260,32 +270,6 @@ def get_current_user_and_role(request: Request) -> Dict[str, Any]:
             detail="Session expired, revoked, or account is inactive. Please log in again."
         )
     return session
-=======
-    Backend Authorization:
-    Verifies token against active_sessions table and checks that underlying user is STILL ACTIVE.
-    Provides graceful fallback for dev and header sessions.
-    """
-    token = extract_token_from_request(request)
-    header_role = request.headers.get("x-user-role")
-    header_name = request.headers.get("x-user-name", "Clinician")
-
-    if token:
-        session = db.validate_session(token)
-        if session:
-            return session
-        if header_role:
-            return {"user_id": header_name, "role": header_role.upper(), "user_name": header_name, "token": token}
-        if "admin" in token.lower():
-            return {"user_id": "admin-root-001", "role": "ADMIN", "user_name": header_name or "Hospital Administrator", "token": token}
-        if "doc" in token.lower():
-            return {"user_id": "DOC-001", "role": "DOCTOR", "user_name": header_name or "Dr. Arvind Kumar", "token": token}
-        if "stf" in token.lower() or "staff" in token.lower():
-            return {"user_id": "STF-001", "role": "STAFF", "user_name": header_name or "Priya Raman", "token": token}
-
-    if header_role:
-        return {"user_id": header_name, "role": header_role.upper(), "user_name": header_name, "token": "header_session"}
-    return {"user_id": "anonymous", "role": "ANONYMOUS", "user_name": "Anonymous", "token": None}
->>>>>>> origin/main
 
 def require_admin(request: Request) -> Dict[str, Any]:
     user_info = get_current_user_and_role(request)
@@ -298,18 +282,13 @@ def require_admin(request: Request) -> Dict[str, Any]:
             details=f"User with role {user_info.get('role')} attempted unauthorized access to admin endpoint: {request.url.path}"
         )
         raise HTTPException(
-            status_code=403, 
+            status_code=403,
             detail="Access Forbidden: Administrator privileges required to access this resource."
         )
     return user_info
 
 def require_active_user(request: Request) -> Dict[str, Any]:
     user_info = get_current_user_and_role(request)
-<<<<<<< HEAD
-=======
-    if user_info.get("role") == "ANONYMOUS":
-        return {"user_id": "clinician", "role": "DOCTOR", "user_name": "Clinician"}
->>>>>>> origin/main
     return user_info
 
 # ==================== REAL AUTHENTICATION ENDPOINTS ====================
@@ -424,7 +403,7 @@ def unified_login(req: LoginRequest, request: Request):
     if pat:
         if pat.get("status") == "INACTIVE":
             raise HTTPException(
-                status_code=403, 
+                status_code=403,
                 detail="Your patient account is inactive. Please contact the hospital administrator."
             )
         token = db.create_session(pat["patient_id"], "PATIENT", pat["full_name"])
@@ -595,22 +574,31 @@ def get_doctors(status: Optional[str] = None):
     return db.get_all_doctors(status=status)
 
 @app.post("/api/admin/doctors")
-<<<<<<< HEAD
 def create_doctor(req: CreateDoctorRequest, auth: Dict[str, Any] = Depends(require_admin)):
     try:
         doc = db.create_doctor(req.model_dump(), admin_name=auth.get("user_name", "Admin"))
     except DB_INTEGRITY_ERROR as exc:
         raise HTTPException(status_code=409, detail="A doctor with this email already exists.") from exc
     db.log_activity(auth.get("user_id", "admin"), auth.get("user_name", "Admin"), "ADMIN", f"Added new Doctor: Dr. {req.full_name} ({req.specialization})", "DOCTOR", doc["doctor_id"])
-=======
-@app.post("/api/doctors")
-def create_doctor(req: CreateDoctorRequest, request: Request):
-    user_info = get_current_user_and_role(request)
-    admin_name = user_info.get("user_name", "Admin")
-    doc = db.create_doctor(req.dict(), admin_name=admin_name)
-    db.log_activity(user_info.get("user_id", "admin"), admin_name, "ADMIN", f"Added new Doctor: Dr. {req.full_name} ({req.specialization})", "DOCTOR", doc["doctor_id"])
->>>>>>> origin/main
     return doc
+
+@app.put("/api/admin/doctors/{doctor_id}")
+def update_doctor(doctor_id: str, req: UpdateDoctorRequest, auth: Dict[str, Any] = Depends(require_admin)):
+    try:
+        doctor = db.update_doctor(doctor_id, req.model_dump(), admin_name=auth.get("user_name", "Admin"))
+    except DB_INTEGRITY_ERROR as exc:
+        raise HTTPException(status_code=409, detail="A doctor with this email already exists.") from exc
+    if not doctor:
+        raise HTTPException(status_code=404, detail="Doctor record not found.")
+    db.log_activity(
+        auth.get("user_id", "admin"),
+        auth.get("user_name", "Admin"),
+        "ADMIN",
+        f"Updated Doctor: Dr. {doctor['full_name']} ({doctor['doctor_id']})",
+        "DOCTOR",
+        doctor["doctor_id"],
+    )
+    return doctor
 
 @app.delete("/api/admin/doctors/{doctor_id}")
 @app.delete("/api/doctors/{doctor_id}")
@@ -701,7 +689,6 @@ def get_admin_patients(auth: Dict[str, Any] = Depends(require_admin)):
 @app.post("/api/patients")
 @app.post("/api/admin/patients")
 def create_patient(req: CreatePatientRequest, request: Request):
-<<<<<<< HEAD
     user_name = request.headers.get("x-user-name", "Clinician")
     user_role = request.headers.get("x-user-role", "DOCTOR")
     try:
@@ -710,15 +697,34 @@ def create_patient(req: CreatePatientRequest, request: Request):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except DB_INTEGRITY_ERROR as exc:
         raise HTTPException(status_code=409, detail="A patient with these details already exists.") from exc
-=======
-    user_info = get_current_user_and_role(request)
-    user_name = user_info.get("user_name", "Clinician")
-    user_role = user_info.get("role", "DOCTOR")
-    p = db.create_patient(req.dict(), actor_name=user_name, actor_role=user_role)
->>>>>>> origin/main
     db.log_activity(user_name, user_name, user_role, f"Created new patient record for {req.full_name} (PID: {p['patient_id']})", "PATIENT", p["patient_id"])
     saved_patient = db.get_patient(p["patient_id"])
     return {**p, **(saved_patient or {})}
+
+@app.put("/api/admin/patients/{patient_id}")
+def update_patient(patient_id: str, req: UpdatePatientRequest, auth: Dict[str, Any] = Depends(require_admin)):
+    try:
+        patient = db.update_patient(
+            patient_id,
+            req.model_dump(),
+            actor_name=auth.get("user_name", "Admin"),
+            actor_role="ADMIN",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except DB_INTEGRITY_ERROR as exc:
+        raise HTTPException(status_code=409, detail="A patient with these details already exists.") from exc
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient record not found.")
+    db.log_activity(
+        auth.get("user_id", "admin"),
+        auth.get("user_name", "Admin"),
+        "ADMIN",
+        f"Updated patient record for {patient['full_name']} (PID: {patient['patient_id']})",
+        "PATIENT",
+        patient["patient_id"],
+    )
+    return patient
 
 @app.get("/api/patients/{patient_id}")
 def get_patient(patient_id: str):
@@ -782,6 +788,7 @@ from .services.document_validator import (
     classify_medical_document,
     validate_patient_identity,
     extract_patient_identifiers_from_text,
+    calculate_sha256,
     DocumentValidationError,
 )
 
@@ -811,13 +818,13 @@ async def upload_patient_report(
     4. Non-Medical Rejection with Clear Diagnostic Reason
     5. Save Active Report ONLY when verified
     """
-<<<<<<< HEAD
-    user_name = request.headers.get("x-user-name", "Clinician") if request else "Clinician"
-    user_role = request.headers.get("x-user-role", "DOCTOR") if request else "DOCTOR"
-
-    patient = db.get_patient(patient_id)
-    if not patient:
-        raise HTTPException(status_code=404, detail="Patient profile not found in database.")
+    user_info = get_current_user_and_role(request)
+    user_name = user_info.get("user_name", "Clinician")
+    user_role = user_info.get("role", "UNKNOWN")
+    if user_role not in {"ADMIN", "DOCTOR", "CLINICIAN", "STAFF", "PATIENT"}:
+        raise HTTPException(status_code=403, detail="Forbidden: your account cannot upload medical reports.")
+    if user_role == "PATIENT" and user_info.get("user_id") != patient_id:
+        raise HTTPException(status_code=403, detail="Forbidden: patient accounts may upload reports only to their own profile.")
 
     upload_name = (file.filename or "").replace("\\", "/").split("/")[-1]
     if not upload_name:
@@ -846,37 +853,6 @@ async def upload_patient_report(
     try:
         # Gate 1: File Security & Signature Check
         sec_info = validate_file_security(temp_path, upload_name)
-=======
-    temp_path = None
-    final_path = None
-    try:
-        user_name = request.headers.get("x-user-name", "Clinician") if request else "Clinician"
-        user_role = request.headers.get("x-user-role", "DOCTOR") if request else "DOCTOR"
-        user_id = request.headers.get("x-user-id", "") if request else ""
-
-        # Step 0: Permission & Access Control Verification
-        norm_role = user_role.strip().upper()
-        if norm_role == "UNAUTHORIZED" or norm_role not in ["DOCTOR", "CLINICIAN", "ADMIN", "SUPER_ADMIN", "STAFF", "PATIENT"]:
-            raise HTTPException(
-                status_code=403,
-                detail="Unauthorized access: insufficient permissions to access or upload medical records."
-            )
-        if norm_role == "PATIENT" and user_id and user_id != patient_id:
-            raise HTTPException(
-                status_code=403,
-                detail="Forbidden: Patient accounts are strictly restricted to their own medical documents."
-            )
-
-        # Save temporary file for deep content inspection
-        temp_filename = f"temp_{uuid.uuid4().hex}_{file.filename}"
-        temp_path = os.path.join(pdf_storage_dir, temp_filename)
-
-        with open(temp_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-
-        # Gate 1: File Security, Format & Signature Check
-        sec_info = validate_file_security(temp_path, file.filename)
->>>>>>> origin/main
         if not sec_info["is_valid"]:
             if os.path.exists(temp_path):
                 os.remove(temp_path)
@@ -889,7 +865,6 @@ async def upload_patient_report(
                 detail={"error": "INVALID_FILE", "message": sec_info.get("reason", "Only supported medical documents can be uploaded.")}
             )
 
-<<<<<<< HEAD
         # Gate 2 & 3: Content & OCR Extraction
         extracted_text, total_pages, ocr_used = extract_raw_text(temp_path)
 
@@ -898,19 +873,6 @@ async def upload_patient_report(
 
         # Gate 5: Non-Medical Document Rejection
         if not classification.get("is_medical", False):
-=======
-        # Gate 2: Content & OCR Extraction
-        extracted_text, total_pages, ocr_used = extract_raw_text(temp_path, sec_info["extension"])
-
-        # Gate 3: Content Understanding & Medical Classification
-        classification = classify_medical_document(extracted_text, file.filename, ocr_used=ocr_used, file_path=temp_path)
-
-        is_med = classification.get("is_medical_document", classification.get("is_medical", True))
-        doc_type = classification.get("document_type", "LAB_REPORT")
-
-        # Gate 3a: Non-Medical Document Rejection
-        if not is_med or doc_type == "NON_MEDICAL":
->>>>>>> origin/main
             if os.path.exists(temp_path):
                 os.remove(temp_path)
             detected_type = classification.get("detected_type_label") or classification.get("document_type", "NON_MEDICAL")
@@ -937,6 +899,7 @@ async def upload_patient_report(
             )
 
         # Gate 3b: Unreadable or Corrupted Content Rejection
+        doc_type = classification.get("document_type", "LAB_REPORT")
         if doc_type in ["UNREADABLE", "CORRUPTED"]:
             if os.path.exists(temp_path):
                 os.remove(temp_path)
@@ -954,131 +917,31 @@ async def upload_patient_report(
                 }
             )
 
-<<<<<<< HEAD
-    # Move from temp to permanent storage
-    final_filename = f"{uuid.uuid4().hex}{extension}"
-    # File will be stored via db.store_uploaded_file() after identity verification passes
-    # Persist the uploaded file via Supabase Storage or local fallback
-    stored_file_path = db.store_uploaded_file(temp_path, final_filename, file.content_type or "application/pdf")
+        final_filename = f"{uuid.uuid4().hex}{extension}"
 
-    report_id = f"REP-{uuid.uuid4().hex[:6].upper()}"
-    extracted_date = classification.get("report_date")
-    extracted_provider = classification.get("provider")
-    doc_type = classification.get("document_type", "LAB_REPORT")
-
-    effective_date = extracted_date or (reportDate.strip() if reportDate.strip() else time.strftime("%Y-%m-%d"))
-
-    # Extract structured parameters from verified document
-    extracted_params = extract_parameters_from_pdf(temp_path, report_id, effective_date)
-
-    effective_provider = extracted_provider or (provider.strip() if provider.strip() else "Clinical Pathology Laboratory")
-    effective_category = reportCategory.strip() if reportCategory.strip() else (
-        "Biochemistry & Hematology" if doc_type == "LAB_REPORT" else doc_type.replace("_", " ").title()
-    )
-
-    # ==================== PATIENT IDENTITY VERIFICATION ====================
-    # Extract patient identifiers from the uploaded document
-    doc_identifiers = extract_patient_identifiers_from_text(extracted_text)
-    doc_patient_name = doc_identifiers.get("patient_name") or classification.get("patient_name") or "Not detected"
-
-    # Get registered patient info for identity comparison
-    registered_patient_name = patient.get("full_name", "")
-    registered_patient_id = patient.get("patient_id", "")
-
-    # Try to extract DOB, age, sex from registered patient record
-    registered_dob = patient.get("dateOfBirth") or patient.get("dob")
-    registered_age = patient.get("age")
-    registered_sex = patient.get("gender")
-
-    # Run strict identity verification
-    identity_result = validate_patient_identity(
-        expected_patient_name=registered_patient_name,
-        expected_patient_id=registered_patient_id,
-        expected_dob=registered_dob,
-        expected_age=registered_age,
-        expected_sex=registered_sex,
-        extracted_text=extracted_text
-    )
-
-    identity_status = identity_result.get("status", "UNVERIFIED")
-    identity_score = identity_result.get("match_score", 0.0)
-    identity_details = identity_result.get("details", "")
-
-    # Log identity verification decision
-    db.log_audit(
-        user_name, user_role, "PATIENT_IDENTITY_VERIFICATION",
-        "REPORT", patient["patient_id"],
-        details=f"{identity_details}. Report: {upload_name}. Status: {identity_status}. Score: {identity_score:.2f}"
-    )
-
-    # ==================== BLOCK MISMATCHED / UNVERIFIED REPORTS ====================
-    # Do NOT save reports whose patient identity does not match the selected patient.
-    # Only VERIFIED and REVIEW_REQUIRED reports are stored; MISMATCH and UNVERIFIED are rejected.
-    if identity_status in ("MISMATCH", "UNVERIFIED"):
-        # Remove the stored file since we will not associate it with this patient
-        if _USE_SUPABASE_STORAGE and _storage is not None:
-            db.delete_uploaded_file(stored_file_path)
-        elif os.path.exists(temp_path):
-            os.remove(temp_path)
-        db.log_audit(
-            user_name, user_role, "REPORT_REJECTED_IDENTITY_MISMATCH",
-            "REPORT", report_id,
-            details=f"Rejected: {identity_details}. Report: {upload_name}. Selected patient: {registered_patient_name}."
-        )
-        return JSONResponse(
-            status_code=422,
-            content={
-                "success": False,
-                "validation_status": "REJECTED",
-                "error_code": "PATIENT_IDENTITY_MISMATCH",
-                "identity_status": identity_status,
-                "match_score": identity_score,
-                "registered_patient_name": registered_patient_name,
-                "extracted_patient_name": doc_patient_name,
-                "detected_identifiers": identity_result.get("detected_identifiers", {}),
-                "conflicts": identity_result.get("conflicts", []),
-                "details": identity_details,
-                "message": "PATIENT DETAILS MISMATCH — DOCUMENT NOT ACCEPTED. The uploaded report does not belong to the selected patient.",
-            }
-        )
-
-    report_record = {
-        "report_id": report_id,
-        "patient_id": patient["patient_id"],
-        "report_date": effective_date,
-        "upload_date": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "provider": effective_provider,
-        "file_path": final_filename,
-        "category": effective_category,
-        "parameter_count": len(extracted_params),
-        "extraction_status": "Verified",
-        "uploaded_by": user_name,
-        "extracted_patient_name": doc_patient_name,
-        "identity_verification_status": identity_status,
-        "identity_match_score": identity_score,
-        "identity_details": identity_details,
-    }
-=======
-        # Gate 4: Dynamic Clinical Parameter Extraction from Verified Medical Content
+        report_id = f"REP-{uuid.uuid4().hex[:6].upper()}"
         extracted_date = classification.get("report_date")
         extracted_provider = classification.get("provider")
+        doc_type = classification.get("document_type", "LAB_REPORT")
+
         effective_date = extracted_date or (reportDate.strip() if reportDate.strip() else time.strftime("%Y-%m-%d"))
+
+        # Extract structured parameters from verified document
+        extracted_params = extract_parameters_from_pdf(temp_path, report_id, effective_date)
+
         effective_provider = extracted_provider or (provider.strip() if provider.strip() else "Clinical Pathology Laboratory")
         effective_category = reportCategory.strip() if reportCategory.strip() else (
             "Biochemistry & Hematology" if doc_type == "LAB_REPORT" else doc_type.replace("_", " ").title()
         )
 
-        extracted_params = extract_parameters_from_pdf(temp_path, report_id="PREVIEW", report_date=effective_date, raw_text=extracted_text)
-
-        # Gate 5: Patient Profile Lookup (Decoupled from Document Validity)
         patient = db.get_patient(patient_id)
         if not patient:
             if os.path.exists(temp_path):
                 os.remove(temp_path)
             db.log_audit(
-                user_name, user_role, "PATIENT_PROFILE_NOT_FOUND",
-                "DOCUMENT", file.filename, status="REJECTED",
-                details=f"Valid medical document ({doc_type}) uploaded, but patient profile '{patient_id}' not found in database."
+                user_name, user_role, "REPORT_UPLOAD_PATIENT_NOT_FOUND",
+                "PATIENT", patient_id, status="REJECTED",
+                details=f"Verified medical document {upload_name} could not be linked because the patient profile does not exist.",
             )
             return JSONResponse(
                 status_code=422,
@@ -1091,103 +954,98 @@ async def upload_patient_report(
                     "detected_category": effective_category,
                     "detected_patient_name": classification.get("patient_name"),
                     "parameter_count": len(extracted_params),
-                    "message": f"Medical document verified as {doc_type.replace('_', ' ').title()}, but patient profile '{patient_id}' was not found in the database.",
-                    "resolution": "The uploaded file is a valid medical record. Please select an existing patient profile from the patient directory or register this patient before uploading.",
-                    "action_required": "Select or register patient profile in database."
-                }
+                    "message": "The document is medical, but the selected patient profile was not found.",
+                    "resolution": {"message": "Register the patient or select an existing patient, then upload the report again."},
+                },
             )
 
-        # Gate 6: Strict Patient Identity Verification
-        from .services.identity_verifier import verify_patient_identity
-        id_decision = verify_patient_identity(patient, extracted_text, classification.get("patient_name"))
->>>>>>> origin/main
+        # ==================== PATIENT IDENTITY VERIFICATION ====================
+        # Extract patient identifiers from the uploaded document
+        doc_identifiers = extract_patient_identifiers_from_text(extracted_text)
+        doc_patient_name = doc_identifiers.get("patient_name") or classification.get("patient_name") or "Not detected"
 
-        if id_decision["status"] in ["IDENTITY_MISMATCH", "IDENTITY_UNVERIFIED"]:
+        # Get registered patient info for identity comparison
+        registered_patient_name = patient.get("full_name", "")
+        registered_patient_id = patient.get("patient_id", "")
+
+        # Try to extract DOB, age, sex from registered patient record
+        registered_dob = patient.get("dateOfBirth") or patient.get("dob")
+        registered_age = patient.get("age")
+        registered_sex = patient.get("gender")
+
+        # Run strict identity verification
+        identity_result = validate_patient_identity(
+            expected_patient_name=registered_patient_name,
+            expected_patient_id=registered_patient_id,
+            expected_dob=registered_dob,
+            expected_age=registered_age,
+            expected_sex=registered_sex,
+            extracted_text=extracted_text
+        )
+
+        identity_status = identity_result.get("status", "UNVERIFIED")
+        identity_score = identity_result.get("match_score", 0.0)
+        identity_details = identity_result.get("details", "")
+
+        # Log identity verification decision
+        db.log_audit(
+            user_name, user_role, "PATIENT_IDENTITY_VERIFICATION",
+            "REPORT", patient["patient_id"],
+            details=f"{identity_details}. Report: {upload_name}. Status: {identity_status}. Score: {identity_score:.2f}"
+        )
+
+        # ==================== BLOCK MISMATCHED / UNVERIFIED REPORTS ====================
+        # Do NOT save reports whose patient identity does not match the selected patient.
+        # Only VERIFIED and REVIEW_REQUIRED reports are stored; MISMATCH and UNVERIFIED are rejected.
+        if identity_status in ("MISMATCH", "UNVERIFIED"):
             if os.path.exists(temp_path):
                 os.remove(temp_path)
-            failed_field = id_decision.get("failed_field") or "PATIENT_NAME"
-            error_code = id_decision.get("error_code") or "PATIENT_NAME_MISMATCH"
-            title = id_decision.get("title") or "PATIENT IDENTITY MISMATCH - INVALID DOCUMENT FOR THIS PATIENT"
-            status_label = id_decision.get("status_label") or "Identity mismatch"
-            reg_id = patient.get("patient_id") or patient.get("id") or "UNKNOWN"
-            doc_id = id_decision.get("extracted_id")
-
             db.log_audit(
-                user_name, user_role, f"{id_decision['status']}_REJECTED",
-                "DOCUMENT", file.filename, status="REJECTED",
-                details=f"Identity check rejected. Field failed: {failed_field}. RegID: {reg_id}, DocID: {doc_id or 'None'}. Reason: {id_decision.get('reason')}"
+                user_name, user_role, "REPORT_REJECTED_IDENTITY_MISMATCH",
+                "REPORT", report_id,
+                details=f"Rejected: {identity_details}. Report: {upload_name}. Selected patient: {registered_patient_name}."
             )
             return JSONResponse(
                 status_code=422,
                 content={
                     "success": False,
-                    "validation_status": id_decision["status"],
-                    "error_code": error_code,
-                    "failed_field": failed_field,
-                    "title": title,
-                    "status_label": status_label,
-                    "registered_patient": patient["full_name"],
-                    "extracted_patient": id_decision.get("extracted_patient") or "Unknown",
-                    "registered_id": reg_id,
-                    "extracted_id": doc_id,
-                    "confidence": id_decision.get("confidence", 0.0),
-                    "reason": id_decision.get("reason"),
-                    "message": title,
-                    "action": id_decision.get("action_required") or "Review or upload the correct document for this patient.",
-                    "details": id_decision
+                    "validation_status": "REJECTED",
+                    "error_code": identity_result.get("error_code") or "PATIENT_IDENTITY_MISMATCH",
+                    "identity_status": identity_status,
+                    "match_score": identity_score,
+                    "registered_patient_name": registered_patient_name,
+                    "extracted_patient_name": doc_patient_name,
+                    "detected_identifiers": identity_result.get("detected_identifiers", {}),
+                    "conflicts": identity_result.get("conflicts", []),
+                    "details": identity_details,
+                    "message": "PATIENT DETAILS MISMATCH — DOCUMENT NOT ACCEPTED. The uploaded report does not belong to the selected patient.",
                 }
             )
 
-        # Gate 7: Duplicate Report Detection
-        doc_hash = sec_info.get("document_hash")
-        if doc_hash:
-            existing_dup = db.get_report_by_hash(patient["patient_id"], doc_hash)
-            if existing_dup:
-                if os.path.exists(temp_path):
-                    os.remove(temp_path)
-                db.log_audit(
-                    user_name, user_role, "DUPLICATE_REPORT_REJECTED",
-                    "DOCUMENT", file.filename, status="REJECTED",
-                    details=f"Duplicate report detected for patient {patient['patient_id']} (matches {existing_dup.get('report_id')})"
-                )
-                return JSONResponse(
-                    status_code=409,
-                    content={
-                        "success": False,
-                        "validation_status": "DUPLICATE_REPORT",
-                        "error_code": "DUPLICATE_REPORT",
-                        "message": f"This medical report has already been uploaded and ingested for this patient (Report ID: {existing_dup.get('report_id')}).",
-                        "existing_report_id": existing_dup.get("report_id"),
-                        "report_date": existing_dup.get("report_date"),
-                        "action": "Duplicate report submission prevented."
-                    }
-                )
-
-        # Gate 8: Enforce Patient Report Capacity Limit (Default 5, expandable by Admin)
-        existing_reports = db.get_patient_reports(patient["patient_id"])
-        max_capacity = db.get_patient_report_limit(patient["patient_id"])
-        if len(existing_reports) >= max_capacity:
+        document_hash = calculate_sha256(temp_path)
+        existing_duplicate = db.get_report_by_hash(patient["patient_id"], document_hash)
+        if existing_duplicate:
             if os.path.exists(temp_path):
                 os.remove(temp_path)
-            raise HTTPException(
-                status_code=403,
-                detail=f"Report capacity limit reached ({len(existing_reports)}/{max_capacity} accepted reports). An administrator can grant additional report capacity if required."
+            db.log_audit(
+                user_name, user_role, "DUPLICATE_REPORT_REJECTED",
+                "DOCUMENT", file.filename, status="REJECTED",
+                details=f"Duplicate report detected for patient {patient['patient_id']} (matches {existing_duplicate.get('report_id')}).",
+            )
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "success": False,
+                    "validation_status": "DUPLICATE_REPORT",
+                    "error_code": "DUPLICATE_REPORT",
+                    "message": f"This medical report has already been uploaded for this patient (Report ID: {existing_duplicate.get('report_id')}).",
+                    "existing_report_id": existing_duplicate.get("report_id"),
+                },
             )
 
-        # Move from temp to permanent storage
-        final_filename = f"{uuid.uuid4().hex}_{file.filename}"
-        final_path = os.path.join(pdf_storage_dir, final_filename)
-        shutil.move(temp_path, final_path)
-        temp_path = None
-
-        report_id = f"REP-{uuid.uuid4().hex[:6].upper()}"
-
-        # Re-tag extracted parameters with confirmed report_id and date
-        for p in extracted_params:
-            p.reportId = report_id
-            p.reportDate = effective_date
-
-        extraction_label = "Verified" if id_decision["status"] == "IDENTITY_VERIFIED" else "Identity Unverified"
+        stored_file_path = db.store_uploaded_file(
+            temp_path, final_filename, file.content_type or "application/pdf"
+        )
 
         report_record = {
             "report_id": report_id,
@@ -1195,32 +1053,20 @@ async def upload_patient_report(
             "report_date": effective_date,
             "upload_date": time.strftime("%Y-%m-%d %H:%M:%S"),
             "provider": effective_provider,
-            "file_path": f"/static/reports/{final_filename}",
+            "file_path": final_filename,
             "category": effective_category,
             "parameter_count": len(extracted_params),
-            "extraction_status": extraction_label,
-            "identity_status": id_decision["status"],
-            "patient_name_on_report": id_decision.get("extracted_patient"),
-            "identity_mismatch_reason": id_decision.get("reason"),
-            "document_hash": doc_hash,
-            "uploaded_by": user_name
+            "extraction_status": "Verified",
+            "uploaded_by": user_name,
+            "extracted_patient_name": doc_patient_name,
+            "identity_verification_status": identity_status,
+            "identity_match_score": identity_score,
+            "identity_details": identity_details,
+            "identity_status": identity_status,
+            "patient_name_on_report": doc_patient_name,
+            "document_hash": document_hash,
         }
 
-<<<<<<< HEAD
-    db.save_report_with_parameters(report_record, param_dicts)
-    report_record["file_path"] = f"/api/reports/{report_id}/file"
-
-    db.log_activity(
-        user_name, user_name, user_role,
-        f"Verified & Uploaded {upload_name} as {report_id} ({effective_category}, {len(extracted_params)} parameters) for Patient {patient['full_name']}",
-        "REPORT", report_id
-    )
-    db.log_audit(
-        user_name, user_role, "REPORT_VALIDATED_AND_UPLOADED",
-        "REPORT", report_id, provider=effective_provider,
-        details=f"Document verified as {doc_type}. Extracted {len(extracted_params)} parameters with confidence {classification.get('confidence', 0.95):.2f}"
-    )
-=======
         param_dicts = [
             {
                 "parameter_name": p.parameterName,
@@ -1231,31 +1077,29 @@ async def upload_patient_report(
                 "status": p.status,
                 "source_page": p.sourcePage,
                 "source_text": p.sourceText or "",
-                "category": p.category or "General"
+                "category": p.category or "General",
             }
             for p in extracted_params
         ]
 
         db.save_report_with_parameters(report_record, param_dicts)
->>>>>>> origin/main
-
-        # Safe float conversion for confidence
-        try:
-            raw_conf = classification.get("confidence", 0.95)
-            conf_val = float(raw_conf) if raw_conf is not None else 0.95
-        except (ValueError, TypeError):
-            conf_val = 0.95
+        report_record["file_path"] = f"/api/reports/{report_id}/file"
 
         db.log_activity(
             user_name, user_name, user_role,
-            f"Verified & Uploaded {file.filename} as {report_id} ({effective_category}, {len(extracted_params)} parameters) for Patient {patient['full_name']}",
-            "REPORT", report_id
+            f"Verified & Uploaded {upload_name} as {report_id} ({effective_category}, {len(extracted_params)} parameters) for Patient {patient['full_name']}",
+            "REPORT", report_id,
         )
         db.log_audit(
             user_name, user_role, "REPORT_VALIDATED_AND_UPLOADED",
             "REPORT", report_id, provider=effective_provider,
-            details=f"Document verified as {doc_type}. Extracted {len(extracted_params)} parameters with confidence {conf_val:.2f}"
+            details=f"Document verified as {doc_type}. Extracted {len(extracted_params)} parameters with confidence {classification.get('confidence', 0.95)}",
         )
+
+        try:
+            confidence = float(classification.get("confidence", 0.95))
+        except (ValueError, TypeError):
+            confidence = 0.95
 
         report_record["extractedParameters"] = param_dicts
         report_record["parameterCount"] = len(param_dicts)
@@ -1263,20 +1107,20 @@ async def upload_patient_report(
             "success": True,
             "validation_status": "VERIFIED",
             "document_type": doc_type,
-            "confidence": conf_val,
+            "confidence": confidence,
             "medical_evidence": classification.get("medical_evidence", []),
             "detected_content": classification.get("detected_content", []),
             "extracted_metadata": {
                 "provider": extracted_provider or "Not detected",
                 "report_date": extracted_date or "Not detected",
-                "patient_name": classification.get("patient_name") or "Not detected"
+                "patient_name": classification.get("patient_name") or "Not detected",
             },
             "user_provided_metadata": {
                 "provider": provider.strip() or None,
-                "report_date": reportDate.strip() or None
+                "report_date": reportDate.strip() or None,
             },
             "message": f"Medical document verified as {doc_type.replace('_', ' ').title()}. {len(extracted_params)} parameters extracted from {file.filename}.",
-            "report": report_record
+            "report": report_record,
         }
 
     except DocumentValidationError as dve:

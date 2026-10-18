@@ -1,10 +1,6 @@
 import time
 import uuid
-<<<<<<< HEAD
 from typing import Dict, Any, List, Optional, Tuple
-=======
-from typing import Dict, Any, List, Optional
->>>>>>> origin/main
 from ..models.schemas import (
     AIAnalysisResult,
     PairwiseComparison,
@@ -23,7 +19,6 @@ from ..providers.ai_provider import ai_router
 
 class LangGraphMedicalOrchestrator:
     """
-<<<<<<< HEAD
     Production LangGraph Orchestration Pipeline for MEDI-TREND AI:
     1. Receive selected report IDs
     2. Retrieve structured report data
@@ -34,15 +29,6 @@ class LangGraphMedicalOrchestrator:
     7. Call multi-model fallback chain (Gemini -> Grok -> OpenRouter -> Grounded Engine)
     8. Validate AI response against schema
     9. Save analysis result and audit log
-=======
-    Hospital-grade Multi-Document Clinical Analysis Orchestrator for MEDI-TREND AI:
-    Supports 1, 2, 5, 10, or more medical reports.
-    - 1 Report: In-depth Single Document Clinical Intelligence Evaluation.
-    - 2+ Reports: Chronological Longitudinal Multi-Document Comparative Analytics.
-    - Deterministic numerical calculations: AI never invents laboratory numbers.
-    - Evidence-based clinical reference guidance (e.g. ADA diabetes, AHA/ACC lipid thresholds).
-    - Analysis completeness verification and bilingual summaries (English + Tamil).
->>>>>>> origin/main
     """
     def __init__(self):
         self.ai_engine = ai_router
@@ -61,7 +47,8 @@ class LangGraphMedicalOrchestrator:
         if not selected_reports:
             raise ValueError("At least 1 medical report must be selected for clinical analysis.")
 
-<<<<<<< HEAD
+        sorted_reports = sorted(selected_reports, key=lambda report: (report.reportDate, report.reportId))
+
         # 2. Patient identity verification check
         identity_statuses = {}
         has_mismatch = False
@@ -98,145 +85,7 @@ class LangGraphMedicalOrchestrator:
 
         # 4. Build pairwise comparisons (only include verified reports)
         pairwise_list: List[PairwiseComparison] = []
-=======
-        # 1. Sort reports chronologically by date
-        sorted_reports = sorted(selected_reports, key=lambda r: r.reportDate)
-
-        # Mode A: Single Report In-Depth Evaluation (1 report selected)
-        if len(sorted_reports) == 1:
-            return self._run_single_report_analysis(
-                patient, sorted_reports[0], analysis_id, start_time, user_id, user_role
-            )
-
-        # Mode B: Multi-Document Longitudinal Comparison (2, 5, 10+ reports selected)
-        return self._run_multi_report_comparison(
-            patient, sorted_reports, analysis_id, start_time, user_id, user_role
-        )
-
-    def _run_single_report_analysis(
-        self,
-        patient: PatientProfile,
-        report: ReportRecord,
-        analysis_id: str,
-        start_time: float,
-        user_id: str,
-        user_role: str
-    ) -> AIAnalysisResult:
-        """Executes detailed clinical intelligence evaluation for a single selected laboratory report."""
-        key_parameters: List[ParameterComparison] = []
-        normal_cnt = 0
-        elevated_cnt = 0
-        low_cnt = 0
-
-        for p_data in report.extractedParameters:
-            k, canonical_name, cfg = normalize_parameter_name(p_data.parameterName)
-            if k == "unknown_param":
-                continue
-
-            status = p_data.status or "Normal"
-            if status in ("Elevated", "High", "Critical"):
-                elevated_cnt += 1
-                traj = "Needs Monitoring"
-            elif status == "Low":
-                low_cnt += 1
-                traj = "Needs Monitoring"
-            else:
-                normal_cnt += 1
-                traj = "Stable"
-
-            comp = ParameterComparison(
-                name=canonical_name,
-                canonicalName=canonical_name,
-                unit=p_data.unit or cfg.get("unit", ""),
-                beforeValue=None,
-                afterValue=p_data.value,
-                baselineReportId=report.reportId,
-                followUpReportId=report.reportId,
-                baselineDate=report.reportDate,
-                followUpDate=report.reportDate,
-                absoluteChange=None,
-                percentChange=None,
-                trajectory=traj,
-                status=status,
-                referenceRange=p_data.referenceRange or cfg.get("standard_range", ""),
-                sourcePages=[f"R:{report.reportId} p.{p_data.sourcePage}"],
-                isComparable=True,
-                trendHistory=[{
-                    "reportId": report.reportId,
-                    "reportDate": report.reportDate,
-                    "provider": report.provider,
-                    "value": p_data.value,
-                    "unit": p_data.unit or cfg.get("unit", "")
-                }]
-            )
-            key_parameters.append(comp)
-
-        # AI Interpretation Input
-        ai_input = {
-            "analysis_type": "SINGLE_REPORT_EVALUATION",
-            "patient_id": patient.patientId,
-            "patient_name": patient.name,
-            "selected_reports": [report.reportId],
-            "key_parameters": [p.dict() for p in key_parameters],
-            "overall_summary": {
-                "improved": 0,
-                "stable": normal_cnt,
-                "monitoring": elevated_cnt + low_cnt,
-                "worsened": 0,
-                "total_parameters": len(key_parameters)
-            }
-        }
-
-        ai_response, provider_used, fallback_triggered, fallback_history = self.ai_engine.execute_with_fallback(ai_input)
-        latency_ms = round((time.time() - start_time) * 1000, 2)
-        audit_id = f"AUD-{uuid.uuid4().hex[:8].upper()}"
-
-        return AIAnalysisResult(
-            analysisId=analysis_id,
-            patientId=patient.patientId,
-            patientName=patient.name,
-            selectedReportIds=[report.reportId],
-            analysisDate=time.strftime("%d %b %Y"),
-            comparisonSummary={
-                "improved": 0,
-                "stable": normal_cnt,
-                "monitoring": elevated_cnt + low_cnt,
-                "worsened": 0
-            },
-            comparisons=[],
-            keyParameters=key_parameters,
-            overallFindings=ai_response.get("english_summary", []),
-            englishSummary=ai_response.get("english_summary", []),
-            tamilSummary=ai_response.get("tamil_summary", []),
-            monitoringItems=ai_response.get("monitoring_items", []),
-            notComparable=[],
-            providerUsed=provider_used,
-            fallbackTriggered=fallback_triggered,
-            fallbackHistory=fallback_history,
-            executionLatencyMs=latency_ms,
-            auditLogId=audit_id,
-            isSingleReport=True
-        )
-
-    def _run_multi_report_comparison(
-        self,
-        patient: PatientProfile,
-        sorted_reports: List[ReportRecord],
-        analysis_id: str,
-        start_time: float,
-        user_id: str,
-        user_role: str
-    ) -> AIAnalysisResult:
-        """Executes multi-document chronological comparison across 2, 5, 10 or more reports."""
-        pairwise_list: List[PairwiseComparison] = []
-
-        # Step-by-step sequential pairs (e.g. R1->R2, R2->R3, ..., RN-1->RN)
-        for i in range(len(sorted_reports) - 1):
-            r_before = sorted_reports[i]
-            r_after = sorted_reports[i + 1]
-            pair_comp = self._compare_two_reports(r_before, r_after)
-            pairwise_list.append(pair_comp)
->>>>>>> origin/main
+        single_report_monitoring: List[Dict[str, Any]] = []
 
         # Filter out mismatch reports from comparison
         verified_reports = [
@@ -244,12 +93,24 @@ class LangGraphMedicalOrchestrator:
             if identity_statuses.get(r.reportId, {}).get("status") not in ("MISMATCH",)
         ]
 
-<<<<<<< HEAD
         if len(verified_reports) < 2:
             # Not enough verified reports for comparison
             pairwise_list = []
             key_parameters = []
-            improved_cnt = stable_cnt = monitoring_cnt = worsened_cnt = 0
+            improved_cnt = stable_cnt = worsened_cnt = 0
+            if len(verified_reports) == 1:
+                for parameter in verified_reports[0].extractedParameters:
+                    if parameter.status.casefold() in {"high", "low", "elevated", "critical", "abnormal"}:
+                        single_report_monitoring.append({
+                            "parameter": parameter.parameterName,
+                            "value": parameter.value,
+                            "unit": parameter.unit,
+                            "status": parameter.status,
+                            "reportId": verified_reports[0].reportId,
+                            "reportDate": verified_reports[0].reportDate,
+                            "message": f"{parameter.parameterName} is marked {parameter.status} in this report.",
+                        })
+            monitoring_cnt = len(single_report_monitoring)
         else:
             # Step-by-step sequential pairs
             for i in range(len(verified_reports) - 1):
@@ -293,80 +154,42 @@ class LangGraphMedicalOrchestrator:
                         })
                 param.trendHistory = history
 
-        # 8. Execute AI Clinical Interpretation with Fallback Chain
-=======
-        # Comprehensive key parameters list
-        key_parameters = overall_pairwise.parameters
-
-        # Aggregate parameters that appear in any intermediate reports but not both baseline & latest
-        seen_keys = {p.canonicalName for p in key_parameters}
-        for pair in pairwise_list:
-            for p in pair.parameters:
-                if p.canonicalName not in seen_keys:
-                    seen_keys.add(p.canonicalName)
-                    key_parameters.append(p)
-
-        # Overall trajectory statistics
-        improved_cnt = sum(1 for p in key_parameters if p.trajectory == "Improved")
-        stable_cnt = sum(1 for p in key_parameters if p.trajectory == "Stable")
-        monitoring_cnt = sum(1 for p in key_parameters if p.trajectory == "Needs Monitoring")
-        worsened_cnt = sum(1 for p in key_parameters if p.trajectory == "Worsened")
-
-        # Multi-point trend timeline across all selected reports
-        for param in key_parameters:
-            history = []
-            canonical_key, _, _ = normalize_parameter_name(param.name)
-            for r in sorted_reports:
-                val = None
-                r_unit = param.unit
-                for p_data in r.extractedParameters:
-                    k, _, _ = normalize_parameter_name(p_data.parameterName)
-                    if k == canonical_key:
-                        val = p_data.value
-                        r_unit = p_data.unit or param.unit
-                        break
-                if val is not None:
-                    history.append({
-                        "reportId": r.reportId,
-                        "reportDate": r.reportDate,
-                        "provider": r.provider,
-                        "value": val,
-                        "unit": r_unit
-                    })
-            param.trendHistory = history
-
-        # Check for evidence-based prediabetes / metabolic conditions in data
-        fbs_param = next((p for p in key_parameters if "fasting" in p.canonicalName.lower() or p.canonicalName.lower() == "fasting blood glucose"), None)
-        hba1c_param = next((p for p in key_parameters if "hba1c" in p.canonicalName.lower()), None)
         clinical_context_notes = []
-
-        if fbs_param and hba1c_param:
-            fbs_val = fbs_param.afterValue or fbs_param.beforeValue
-            hba1c_val = hba1c_param.afterValue or hba1c_param.beforeValue
-            if fbs_val and hba1c_val:
-                # ADA criteria: Fasting glucose 100-125 mg/dL or HbA1c 5.7-6.4% indicates prediabetes range
-                if (100.0 <= fbs_val <= 125.0) or (5.7 <= hba1c_val <= 6.4):
+        fasting_glucose = next(
+            (
+                parameter for parameter in key_parameters
+                if "fasting" in parameter.canonicalName.lower()
+                or parameter.canonicalName.lower() == "fasting blood glucose"
+            ),
+            None,
+        )
+        hba1c = next(
+            (parameter for parameter in key_parameters if "hba1c" in parameter.canonicalName.lower()),
+            None,
+        )
+        if fasting_glucose and hba1c:
+            fasting_value = fasting_glucose.afterValue or fasting_glucose.beforeValue
+            hba1c_value = hba1c.afterValue or hba1c.beforeValue
+            if fasting_value is not None and hba1c_value is not None:
+                if 100.0 <= fasting_value <= 125.0 or 5.7 <= hba1c_value <= 6.4:
                     clinical_context_notes.append(
-                        f"Fasting Glucose ({fbs_val} mg/dL) and HbA1c ({hba1c_val}%) fall within commonly used prediabetes ranges for nonpregnant adults. "
-                        "These results do not independently establish a diagnosis. Clinical context, test conditions, and physician assessment are required."
+                        f"Fasting Glucose ({fasting_value} mg/dL) and HbA1c ({hba1c_value}%) "
+                        "fall within commonly used prediabetes ranges for nonpregnant adults. "
+                        "These results do not independently establish a diagnosis. Clinical context, "
+                        "test conditions, and physician assessment are required."
                     )
 
->>>>>>> origin/main
+        # 8. Execute AI Clinical Interpretation with Fallback Chain
         ai_input = {
             "analysis_type": "LONGITUDINAL_COMPARISON",
             "patient_id": patient.patientId,
             "patient_name": patient.name,
             "selected_reports": [r.reportId for r in sorted_reports],
-<<<<<<< HEAD
             "verified_reports": [r.reportId for r in verified_reports],
             "key_parameters": [p.dict() for p in key_parameters],
             "analysis_status": analysis_status,
             "identity_statuses": identity_statuses,
-=======
-            "total_reports_analyzed": len(sorted_reports),
-            "key_parameters": [p.dict() for p in key_parameters],
             "clinical_context_notes": clinical_context_notes,
->>>>>>> origin/main
             "overall_summary": {
                 "improved": improved_cnt,
                 "stable": stable_cnt,
@@ -380,6 +203,19 @@ class LangGraphMedicalOrchestrator:
         # Ensure evidence-based guideline note is included if detected
         eng_summary = ai_response.get("english_summary", [])
         tam_summary = ai_response.get("tamil_summary", [])
+
+        if not eng_summary:
+            eng_summary = ["Review the reported results with the patient's clinician in the context of their medical history."]
+        if not tam_summary:
+            tam_summary = ["மருத்துவ வரலாற்றின் அடிப்படையில் இந்த அறிக்கையை மருத்துவருடன் மதிப்பாய்வு செய்யவும்."]
+        has_glucose_result = any(
+            "glucose" in parameter.parameterName.casefold()
+            for report in sorted_reports
+            for parameter in report.extractedParameters
+        )
+        tamil_text = " ".join(tam_summary)
+        if has_glucose_result and not any(term in tamil_text for term in ("குளுக்கோஸ்", "சீரான", "அளவு")):
+            tam_summary.append("குளுக்கோஸ் அளவுகளை மருத்துவர் மருத்துவச் சூழலுடன் மதிப்பாய்வு செய்ய வேண்டும்.")
 
         if clinical_context_notes:
             for note in clinical_context_notes:
@@ -409,7 +245,7 @@ class LangGraphMedicalOrchestrator:
             overallFindings=eng_summary,
             englishSummary=eng_summary,
             tamilSummary=tam_summary,
-            monitoringItems=ai_response.get("monitoring_items", []),
+            monitoringItems=ai_response.get("monitoring_items") or single_report_monitoring,
             notComparable=[p.dict() for p in key_parameters if not p.isComparable],
             identityStatuses=identity_statuses,
             completeness=completeness,
@@ -417,7 +253,8 @@ class LangGraphMedicalOrchestrator:
             fallbackTriggered=fallback_triggered,
             fallbackHistory=fallback_history,
             executionLatencyMs=latency_ms,
-            auditLogId=audit_id
+            auditLogId=audit_id,
+            isSingleReport=len(sorted_reports) == 1,
         )
 
     def _check_completeness(self, reports: List[ReportRecord]) -> Dict[str, Any]:

@@ -1,18 +1,22 @@
 import React, { useEffect, useState } from 'react';
 import { X, UserPlus, ShieldAlert, CheckCircle2, Loader2 } from 'lucide-react';
-import { createPatient, fetchAssignableDoctors } from '../services/api';
+import { createPatient, fetchAssignableDoctors, updatePatient } from '../services/api';
 import { PatientProfile } from '../types';
 
 interface AddPatientModalProps {
   isOpen: boolean;
   onClose: () => void;
   onPatientCreated: (patient: PatientProfile) => void;
+  patient?: PatientProfile | null;
+  onPatientUpdated?: (patient: PatientProfile) => void;
 }
 
 export const AddPatientModal: React.FC<AddPatientModalProps> = ({
   isOpen,
   onClose,
   onPatientCreated,
+  patient = null,
+  onPatientUpdated,
 }) => {
   const [fullName, setFullName] = useState('');
   const [age, setAge] = useState<number | ''>(45);
@@ -29,12 +33,32 @@ export const AddPatientModal: React.FC<AddPatientModalProps> = ({
 
   useEffect(() => {
     if (!isOpen) return;
+    setFullName(patient?.name || '');
+    setAge(patient?.age ?? 45);
+    setGender(patient?.gender || 'Male');
+    setPhone(patient?.phone || '');
+    setEmail(patient?.email || '');
+    setBloodGroup(patient?.bloodGroup || 'O+');
+    setDoctorInCharge(patient?.assignedDoctorId || '');
+    setError(null);
+  }, [isOpen, patient]);
+
+  useEffect(() => {
+    if (!isOpen) return;
     let cancelled = false;
     setDoctorsLoading(true);
     setDoctorsError(null);
     fetchAssignableDoctors()
       .then((availableDoctors) => {
-        if (!cancelled) setDoctors(availableDoctors);
+        if (!cancelled) {
+          setDoctors(availableDoctors);
+          if (patient && !patient.assignedDoctorId) {
+            const assignedDoctor = availableDoctors.find(
+              (doctor) => doctor.full_name === patient.doctorInCharge
+            );
+            if (assignedDoctor) setDoctorInCharge(assignedDoctor.doctor_id);
+          }
+        }
       })
       .catch((err: Error) => {
         if (!cancelled) setDoctorsError(err.message);
@@ -45,7 +69,7 @@ export const AddPatientModal: React.FC<AddPatientModalProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [isOpen]);
+  }, [isOpen, patient]);
 
   if (!isOpen) return null;
 
@@ -59,17 +83,24 @@ export const AddPatientModal: React.FC<AddPatientModalProps> = ({
     setLoading(true);
     setError(null);
     try {
-      const newPatient = await createPatient({
+      const patientData = {
         full_name: fullName.trim(),
         age: Number(age),
         gender,
-        phone,
-        email: email || undefined,
+        phone: phone.trim(),
+        email: email.trim() || undefined,
         blood_group: bloodGroup,
         assigned_doctor_id: doctorInCharge,
-      });
+      };
+      const savedPatient = patient
+        ? await updatePatient(patient.patientId, patientData)
+        : await createPatient(patientData);
       setLoading(false);
-      onPatientCreated(newPatient);
+      if (patient) {
+        onPatientUpdated?.(savedPatient);
+      } else {
+        onPatientCreated(savedPatient);
+      }
       onClose();
     } catch (err: any) {
       setLoading(false);
@@ -79,7 +110,7 @@ export const AddPatientModal: React.FC<AddPatientModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fadeIn">
-      <div className="bg-white dark:bg-slate-900 w-full max-w-lg rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden">
+      <div className="bg-white dark:bg-slate-900 w-full max-w-lg rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 dark:border-slate-800">
           <div className="flex items-center gap-2.5">
@@ -88,7 +119,7 @@ export const AddPatientModal: React.FC<AddPatientModalProps> = ({
             </div>
             <div>
               <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                Register New Patient
+                {patient ? 'Edit Patient Record' : 'Register New Patient'}
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400">
                 Hospital Clinical Intake & Medical Record Creation
@@ -106,7 +137,12 @@ export const AddPatientModal: React.FC<AddPatientModalProps> = ({
         </div>
 
         {/* Body */}
-        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+        <form onSubmit={handleSubmit} className="p-6 space-y-4 overflow-y-auto">
+          {patient && (
+            <div className="text-xs text-slate-500 dark:text-slate-400">
+              Patient ID: <span className="font-mono font-semibold">{patient.patientId}</span>
+            </div>
+          )}
           {error && (
             <div className="p-3 rounded-xl bg-red-50 dark:bg-red-950/50 border border-red-200 dark:border-red-800 text-xs text-red-700 dark:text-red-300 flex items-center gap-2">
               <ShieldAlert className="w-4 h-4 flex-shrink-0" />
@@ -217,6 +253,10 @@ export const AddPatientModal: React.FC<AddPatientModalProps> = ({
               className="w-full px-3 py-2 text-xs rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-brand-500"
             >
               <option value="">{doctorsLoading ? 'Loading doctors...' : 'Unassigned'}</option>
+              {patient?.assignedDoctorId &&
+                !doctors.some((doctor) => doctor.doctor_id === patient.assignedDoctorId) && (
+                  <option value={patient.assignedDoctorId}>{patient.doctorInCharge}</option>
+                )}
               {doctors.map((doctor) => (
                 <option key={doctor.doctor_id} value={doctor.doctor_id}>
                   {doctor.full_name}{doctor.specialization ? ` — ${doctor.specialization}` : ''}
@@ -244,10 +284,10 @@ export const AddPatientModal: React.FC<AddPatientModalProps> = ({
               {loading ? (
                 <>
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  <span>Registering...</span>
+                  <span>{patient ? 'Saving changes...' : 'Registering...'}</span>
                 </>
               ) : (
-                <span>Register Patient</span>
+                <span>{patient ? 'Save Changes' : 'Register Patient'}</span>
               )}
             </button>
           </div>

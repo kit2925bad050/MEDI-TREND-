@@ -1,4 +1,5 @@
 import os
+import re
 import sqlite3
 import hashlib
 import json
@@ -110,21 +111,31 @@ _storage: Optional[SupabaseStorage] = None
 
 
 def _convert_placeholders(sql: str) -> str:
-    """Convert SQLite ? placeholders to PostgreSQL $1, $2, ... placeholders.
+    """Translate SQLite insert and placeholder syntax for PostgreSQL.
 
     Only active when _USE_POSTGRES is True. All existing SQL in this file uses
-    ? placeholders and is left unchanged — this function performs the conversion
-    transparently at execution time.
+    ? placeholders and SQLite seed upserts — this function translates them for
+    psycopg2 when queries execute.
     """
     if not _USE_POSTGRES:
         return sql
-    parts = sql.split("?")
-    if len(parts) == 1:
-        return sql
-    result = parts[0]
-    for i in range(1, len(parts)):
-        result += f"${i}" + parts[i]
-    return result
+    upsert_match = re.match(
+        r"\s*INSERT\s+OR\s+REPLACE\s+INTO\s+([A-Za-z_]\w*)\s*\(([^)]+)\)\s*(VALUES\s*\([^)]*\))",
+        sql,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if upsert_match:
+        table, raw_columns, values_clause = upsert_match.groups()
+        columns = [column.strip() for column in raw_columns.split(",")]
+        conflict_column = columns[0]
+        updates = ", ".join(
+            f"{column} = EXCLUDED.{column}" for column in columns[1:]
+        )
+        sql = (
+            f"INSERT INTO {table} ({raw_columns}) {values_clause} "
+            f"ON CONFLICT ({conflict_column}) DO UPDATE SET {updates}"
+        )
+    return sql.replace("?", "%s")
 
 
 def _pg_bool_default(value: bool) -> str:
@@ -181,6 +192,9 @@ class _PgConnection:
     def close(self):
         self._conn.close()
 
+    def rollback(self):
+        self._conn.rollback()
+
 
 def hash_password(password: str) -> str:
     """Secure SHA-256 password hashing with salt."""
@@ -209,7 +223,6 @@ class DatabaseManager:
     def __init__(self):
         self.db_path = DB_FILE
         self._use_postgres = _USE_POSTGRES
-        self._pg_conn = None
         global _storage
         if _USE_SUPABASE_STORAGE and _storage is None:
             _storage = SupabaseStorage(_supabase_client, _SUPABASE_BUCKET)
@@ -217,9 +230,7 @@ class DatabaseManager:
 
     def get_connection(self):
         if self._use_postgres:
-            if self._pg_conn is None or self._pg_conn._conn.closed:
-                self._pg_conn = _PgConnection(psycopg2.connect(os.environ["DATABASE_URL"]))
-            return self._pg_conn
+            return _PgConnection(psycopg2.connect(os.environ["DATABASE_URL"]))
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         return conn
@@ -440,7 +451,6 @@ class DatabaseManager:
         )
         """)
 
-<<<<<<< HEAD
         # Migration columns if tables already exist
         migrations = [
             ("admin_users", "must_change_password INTEGER DEFAULT 1"),
@@ -483,8 +493,6 @@ class DatabaseManager:
             except Exception:
                 pass
 
-=======
->>>>>>> origin/main
         # 6. Medical Reports Table
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS medical_reports (
@@ -1294,7 +1302,7 @@ class DatabaseManager:
                 conn.close()
                 return False, "Account is deactivated. Please contact the hospital administrator."
             cursor.execute("""
-            UPDATE doctors 
+            UPDATE doctors
             SET password_hash = ?, recovery_token = NULL, recovery_token_expires_at = NULL 
             WHERE id = ?
             """, (hash_password(new_password), doc_row["id"]))
@@ -1376,7 +1384,7 @@ class DatabaseManager:
         if existing:
             # Reactivate and update if previously deactivated
             cursor.execute("""
-            UPDATE doctors 
+            UPDATE doctors
             SET status = 'ACTIVE', full_name = ?, phone = ?, specialization = ?, department = ?, deactivation_reason = NULL, deactivated_by = NULL, deactivated_at = NULL, permissions = ?
             WHERE id = ?
             """, (
@@ -1423,6 +1431,47 @@ class DatabaseManager:
             details=f"Admin created doctor Dr. {full_name} ({doc_data.get('specialization', 'General Medicine')})"
         )
         return {"id": internal_id, "doctor_id": d_id, "name": full_name, "full_name": full_name, **doc_data, "status": "ACTIVE", "permissions": perms_list}
+
+    def update_doctor(self, doctor_id: str, doc_data: Dict[str, Any], admin_name: str = "Admin") -> Optional[Dict[str, Any]]:
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute("SELECT doctor_id FROM doctors WHERE doctor_id = ? OR id = ?", (doctor_id, doctor_id))
+            existing = cursor.fetchone()
+            if not existing:
+                return None
+
+            resolved_id = existing["doctor_id"]
+            cursor.execute("""
+            UPDATE doctors
+            SET full_name = ?, email = ?, phone = ?, specialization = ?, department = ?
+            WHERE doctor_id = ?
+            """, (
+                doc_data["full_name"].strip(),
+                doc_data["email"].strip().lower(),
+                (doc_data.get("phone") or "").strip(),
+                (doc_data.get("specialization") or "General Medicine").strip(),
+                (doc_data.get("department") or "Cardiology").strip(),
+                resolved_id,
+            ))
+            conn.commit()
+            cursor.execute("SELECT * FROM doctors WHERE doctor_id = ?", (resolved_id,))
+            row = cursor.fetchone()
+            result = dict(row) if row else None
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+        if result:
+            self.log_audit(
+                admin_name, "ADMIN", "DOCTOR_UPDATED",
+                actor_user_id=admin_name, actor_role="ADMIN", target_user_id=resolved_id,
+                entity_type="DOCTOR", entity_id=resolved_id,
+                details=f"Admin updated doctor profile for {resolved_id}."
+            )
+        return result
 
     def delete_doctor(self, doctor_id: str, admin_name: str = "Admin") -> Tuple[bool, str]:
         """Permanently delete doctor record from database."""
@@ -1649,8 +1698,8 @@ class DatabaseManager:
         cursor = conn.cursor()
         p_id = p_data.get("patient_id") or f"PT-{uuid.uuid4().hex[:6].upper()}"
         internal_id = str(uuid.uuid4())
-<<<<<<< HEAD
         assigned_doctor_id = (p_data.get("assigned_doctor_id") or "").strip()
+        phone_clean = (p_data.get("phone") or "").strip()
         if assigned_doctor_id:
             cursor.execute(
                 "SELECT doctor_id FROM doctors WHERE doctor_id = ? AND status = 'ACTIVE'",
@@ -1661,17 +1710,6 @@ class DatabaseManager:
                 conn.close()
                 raise ValueError("Select an active doctor from the list.")
             assigned_doctor_id = doctor["doctor_id"]
-=======
-        phone_clean = str(p_data.get("phone", "")).strip()
-        
-        # Check existing by phone if provided
-        if phone_clean:
-            cursor.execute("SELECT * FROM patients WHERE phone = ? AND status IN ('ACTIVE', 'Active')", (phone_clean,))
-            existing = cursor.fetchone()
-            if existing:
-                conn.close()
-                return dict(existing)
->>>>>>> origin/main
         
         cursor.execute("""
         INSERT INTO patients (id, patient_id, full_name, age, gender, phone, email, blood_group, status, avatar_url, assigned_doctor_id)
@@ -1686,11 +1724,7 @@ class DatabaseManager:
             p_data.get("email", ""),
             p_data.get("blood_group", "O+"),
             p_data.get("avatar_url"),
-<<<<<<< HEAD
             assigned_doctor_id
-=======
-            p_data.get("assigned_doctor_id", "Dr. Arvind Kumar")
->>>>>>> origin/main
         ))
         conn.commit()
         conn.close()
@@ -1709,11 +1743,67 @@ class DatabaseManager:
             "status": "ACTIVE",
         }
 
+    def update_patient(self, patient_id: str, p_data: Dict[str, Any], actor_name: str = "Admin", actor_role: str = "ADMIN") -> Optional[Dict[str, Any]]:
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                "SELECT patient_id, assigned_doctor_id FROM patients WHERE patient_id = ? OR id = ?",
+                (patient_id, patient_id),
+            )
+            existing = cursor.fetchone()
+            if not existing:
+                return None
+
+            resolved_id = existing["patient_id"]
+            assigned_doctor_id = (p_data.get("assigned_doctor_id") or "").strip()
+            if assigned_doctor_id:
+                cursor.execute(
+                    "SELECT doctor_id, status FROM doctors WHERE doctor_id = ?",
+                    (assigned_doctor_id,),
+                )
+                doctor = cursor.fetchone()
+                if not doctor or (
+                    doctor["status"] != "ACTIVE"
+                    and assigned_doctor_id != existing["assigned_doctor_id"]
+                ):
+                    raise ValueError("Select an active doctor from the list.")
+                assigned_doctor_id = doctor["doctor_id"]
+
+            cursor.execute("""
+            UPDATE patients
+            SET full_name = ?, age = ?, gender = ?, phone = ?, email = ?, blood_group = ?, assigned_doctor_id = ?
+            WHERE patient_id = ?
+            """, (
+                p_data["full_name"].strip(),
+                int(p_data["age"]),
+                p_data["gender"].strip(),
+                (p_data.get("phone") or "").strip(),
+                (p_data.get("email") or "").strip().lower(),
+                (p_data.get("blood_group") or "").strip(),
+                assigned_doctor_id,
+                resolved_id,
+            ))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+        self.log_audit(
+            actor_name, actor_role, "PATIENT_UPDATED",
+            actor_user_id=actor_name, actor_role=actor_role, target_user_id=resolved_id,
+            entity_type="PATIENT", entity_id=resolved_id,
+            details=f"Updated patient profile for {resolved_id}; clinical history preserved."
+        )
+        return self.get_patient(resolved_id)
+
     def delete_patient(self, patient_id: str, actor_name: str = "Admin", actor_role: str = "ADMIN") -> Tuple[bool, str]:
         """Permanently delete patient and all related reports/parameters/appointments."""
         conn = self.get_connection()
         cursor = conn.cursor()
-        
+
         cursor.execute("DELETE FROM report_parameters WHERE patient_id = ? OR patient_id IN (SELECT patient_id FROM patients WHERE id = ?)", (patient_id, patient_id))
         cursor.execute("DELETE FROM medical_reports WHERE patient_id = ? OR patient_id IN (SELECT patient_id FROM patients WHERE id = ?)", (patient_id, patient_id))
         cursor.execute("DELETE FROM patient_report_limits WHERE patient_id = ?", (patient_id,))
@@ -1809,8 +1899,8 @@ class DatabaseManager:
             """, (patient_id, patient_id, patient_id))
         else:
             cursor.execute("""
-            SELECT * FROM medical_reports 
-            WHERE (patient_id = ? 
+            SELECT * FROM medical_reports
+            WHERE (patient_id = ?
                OR patient_id IN (SELECT patient_id FROM patients WHERE id = ?)
                OR patient_id IN (SELECT id FROM patients WHERE patient_id = ?))
               AND (is_deleted = 0 OR is_deleted IS NULL)
@@ -1942,11 +2032,7 @@ class DatabaseManager:
 
         r_pk = str(uuid.uuid4())
         cursor.execute("""
-<<<<<<< HEAD
-        INSERT INTO medical_reports (id, report_id, patient_id, report_date, upload_date, provider, file_path, category, parameter_count, extraction_status, uploaded_by, is_deleted, extracted_patient_name, identity_verification_status, identity_match_score, identity_details)
-=======
         INSERT INTO medical_reports (id, report_id, patient_id, report_date, upload_date, provider, file_path, category, parameter_count, extraction_status, uploaded_by, is_deleted, identity_status, patient_name_on_report, identity_mismatch_reason, document_hash)
->>>>>>> origin/main
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
         """, (
             r_pk,
@@ -1960,17 +2046,10 @@ class DatabaseManager:
             len(parameters),
             report_record.get("extraction_status", "Verified"),
             report_record.get("uploaded_by", "Doctor"),
-<<<<<<< HEAD
-            report_record.get("extracted_patient_name"),
-            report_record.get("identity_verification_status", "UNVERIFIED"),
-            report_record.get("identity_match_score", 0.0),
-            report_record.get("identity_details", ""),
-=======
-            report_record.get("identity_status", "IDENTITY_VERIFIED"),
-            report_record.get("patient_name_on_report"),
-            report_record.get("identity_mismatch_reason"),
-            report_record.get("document_hash")
->>>>>>> origin/main
+            report_record.get("identity_status", "UNVERIFIED"),
+            report_record.get("patient_name_on_report") or report_record.get("extracted_patient_name"),
+            report_record.get("identity_mismatch_reason") or report_record.get("identity_details", ""),
+            report_record.get("document_hash"),
         ))
 
         for p in parameters:
@@ -2002,8 +2081,8 @@ class DatabaseManager:
         conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute("""
-        SELECT * FROM medical_reports 
-        WHERE (patient_id = ? 
+        SELECT * FROM medical_reports
+        WHERE (patient_id = ?
            OR patient_id IN (SELECT patient_id FROM patients WHERE id = ?)
            OR patient_id IN (SELECT id FROM patients WHERE patient_id = ?))
           AND document_hash = ?
@@ -2168,399 +2247,4 @@ class DatabaseManager:
             "ai_providers": ai_providers
         }
 
-<<<<<<< HEAD
 db = DatabaseManager()
-=======
-    # ==================== PATIENT REPORT CAPACITY LIMITS ====================
-    def get_patient_report_limit(self, patient_id: str) -> int:
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT max_reports FROM patient_report_limits WHERE patient_id = ?", (patient_id,))
-        row = cursor.fetchone()
-        conn.close()
-        return row[0] if row else 5
-
-    def update_patient_report_limit(self, patient_id: str, max_reports: int, updated_by: str, reason: str = "") -> Dict[str, Any]:
-        prev_limit = self.get_patient_report_limit(patient_id)
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-        INSERT INTO patient_report_limits (patient_id, max_reports, updated_by, updated_reason, updated_at)
-        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-        ON CONFLICT(patient_id) DO UPDATE SET
-            max_reports = excluded.max_reports,
-            updated_by = excluded.updated_by,
-            updated_reason = excluded.updated_reason,
-            updated_at = CURRENT_TIMESTAMP
-        """, (patient_id, max_reports, updated_by, reason))
-        conn.commit()
-        conn.close()
-
-        self.log_audit(
-            user_id=updated_by,
-            role="ADMIN",
-            action="PATIENT_REPORT_LIMIT_INCREASED",
-            entity_type="PATIENT",
-            entity_id=patient_id,
-            details=f"Report capacity limit changed from {prev_limit} to {max_reports}. Reason: {reason or 'Administrative grant'}",
-            actor_user_id=updated_by,
-            actor_role="ADMIN",
-            target_user_id=patient_id,
-            reason=reason
-        )
-
-        return {
-            "success": True,
-            "patient_id": patient_id,
-            "previous_limit": prev_limit,
-            "max_reports": max_reports,
-            "updated_by": updated_by,
-            "reason": reason
-        }
-
-    # ==================== DOCTOR AVAILABILITY & SCHEDULING ====================
-    def get_doctor_availability(self, doctor_id: str) -> Dict[str, Any]:
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM doctor_availability WHERE doctor_id = ?", (doctor_id,))
-        row = cursor.fetchone()
-        conn.close()
-        if row:
-            d = dict(row)
-            try:
-                d["working_days"] = json.loads(d.get("working_days_json") or '[]')
-            except Exception:
-                d["working_days"] = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
-            try:
-                d["blocked_dates"] = json.loads(d.get("blocked_dates_json") or '[]')
-            except Exception:
-                d["blocked_dates"] = []
-            return d
-        
-        # Default verified schedule
-        return {
-            "doctor_id": doctor_id,
-            "working_days": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"],
-            "start_time": "09:00 AM",
-            "end_time": "05:00 PM",
-            "slot_duration_mins": 30,
-            "break_start": "01:00 PM",
-            "break_end": "02:00 PM",
-            "blocked_dates": [],
-            "is_available": 1
-        }
-
-    def set_doctor_availability(
-        self,
-        doctor_id: str,
-        working_days: Optional[List[str]] = None,
-        start_time: str = "09:00 AM",
-        end_time: str = "05:00 PM",
-        slot_duration_mins: int = 30,
-        break_start: str = "01:00 PM",
-        break_end: str = "02:00 PM",
-        blocked_dates: Optional[List[str]] = None,
-        is_available: bool = True
-    ) -> Dict[str, Any]:
-        days_json = json.dumps(working_days or ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"])
-        blocked_json = json.dumps(blocked_dates or [])
-        avail_int = 1 if is_available else 0
-
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-        INSERT INTO doctor_availability (
-            doctor_id, working_days_json, start_time, end_time, slot_duration_mins,
-            break_start, break_end, blocked_dates_json, is_available, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-        ON CONFLICT(doctor_id) DO UPDATE SET
-            working_days_json = excluded.working_days_json,
-            start_time = excluded.start_time,
-            end_time = excluded.end_time,
-            slot_duration_mins = excluded.slot_duration_mins,
-            break_start = excluded.break_start,
-            break_end = excluded.break_end,
-            blocked_dates_json = excluded.blocked_dates_json,
-            is_available = excluded.is_available,
-            updated_at = CURRENT_TIMESTAMP
-        """, (doctor_id, days_json, start_time, end_time, slot_duration_mins, break_start, break_end, blocked_json, avail_int))
-        conn.commit()
-        conn.close()
-
-        return self.get_doctor_availability(doctor_id)
-
-    def get_available_slots(self, doctor_id: str, date_str: str) -> List[Dict[str, Any]]:
-        """
-        Generate un-booked, valid bookable slots for a doctor on a specific date.
-        Respects doctor leave, blocked dates, break hours, and existing confirmed appointments.
-        """
-        avail = self.get_doctor_availability(doctor_id)
-        if not avail.get("is_available"):
-            return []
-
-        # Check if date is blocked/leave
-        if date_str in avail.get("blocked_dates", []):
-            return []
-
-        # Standard clinic bookable slots
-        all_slots = [
-            "09:00 AM - 09:30 AM",
-            "09:30 AM - 10:00 AM",
-            "10:00 AM - 10:30 AM",
-            "10:30 AM - 11:00 AM",
-            "11:00 AM - 11:30 AM",
-            "11:30 AM - 12:00 PM",
-            "12:00 PM - 12:30 PM",
-            "02:00 PM - 02:30 PM",
-            "02:30 PM - 03:00 PM",
-            "03:00 PM - 03:30 PM",
-            "03:30 PM - 04:00 PM",
-            "04:00 PM - 04:30 PM",
-            "04:30 PM - 05:00 PM"
-        ]
-
-        # Fetch existing booked/confirmed appointments
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-        SELECT slot_time FROM appointments
-        WHERE doctor_id = ? AND appointment_date = ? AND status IN ('CONFIRMED', 'PROPOSED')
-        """, (doctor_id, date_str))
-        booked_slots = set(r[0] for r in cursor.fetchall())
-        conn.close()
-
-        slot_items = []
-        for s in all_slots:
-            is_booked = s in booked_slots
-            slot_items.append({
-                "slot_time": s,
-                "is_available": not is_booked,
-                "date": date_str,
-                "doctor_id": doctor_id
-            })
-
-        return slot_items
-
-    # ==================== APPOINTMENT OPERATIONS & CONCURRENCY ====================
-    def create_appointment(
-        self,
-        patient_id: str,
-        patient_name: str,
-        doctor_id: str,
-        doctor_name: str,
-        department: str,
-        appointment_date: str,
-        slot_time: str,
-        reason: str = "",
-        created_by: str = "PATIENT"
-    ) -> Dict[str, Any]:
-        """
-        Atomically reserve appointment with conflict detection preventing double booking.
-        """
-        conn = self.get_connection()
-        cursor = conn.cursor()
-
-        # 1. Check double booking conflict
-        cursor.execute("""
-        SELECT appointment_id, patient_name FROM appointments
-        WHERE doctor_id = ? AND appointment_date = ? AND slot_time = ? AND status IN ('CONFIRMED', 'PROPOSED')
-        """, (doctor_id, appointment_date, slot_time))
-        conflict = cursor.fetchone()
-        if conflict:
-            conn.close()
-            raise ValueError(f"This time slot ({slot_time} on {appointment_date}) has already been reserved for Dr. {doctor_name}. Please choose another available slot.")
-
-        apt_num = f"APT-{uuid.uuid4().hex[:6].upper()}"
-        apt_id = str(uuid.uuid4())
-
-        cursor.execute("""
-        INSERT INTO appointments (
-            id, appointment_id, patient_id, patient_name, doctor_id, doctor_name,
-            department, appointment_date, slot_time, status, reason, created_by, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'CONFIRMED', ?, ?, CURRENT_TIMESTAMP)
-        """, (
-            apt_id, apt_num, patient_id, patient_name, doctor_id, doctor_name,
-            department, appointment_date, slot_time, reason, created_by
-        ))
-        conn.commit()
-        conn.close()
-
-        self.log_audit(
-            user_id=created_by,
-            role="PATIENT" if created_by == patient_id else "CLINICIAN",
-            action="APPOINTMENT_BOOKED",
-            entity_type="APPOINTMENT",
-            entity_id=apt_num,
-            details=f"Confirmed consultation booking for {patient_name} with Dr. {doctor_name} ({department}) on {appointment_date} at {slot_time}.",
-            actor_user_id=created_by,
-            target_user_id=doctor_id,
-            reason=reason
-        )
-
-        return {
-            "success": True,
-            "appointment_id": apt_num,
-            "patient_id": patient_id,
-            "patient_name": patient_name,
-            "doctor_id": doctor_id,
-            "doctor_name": doctor_name,
-            "department": department,
-            "appointment_date": appointment_date,
-            "slot_time": slot_time,
-            "status": "CONFIRMED",
-            "reason": reason
-        }
-
-    def get_appointments_for_patient(self, patient_id: str) -> List[Dict[str, Any]]:
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM appointments WHERE patient_id = ? ORDER BY appointment_date DESC, created_at DESC", (patient_id,))
-        rows = [dict(r) for r in cursor.fetchall()]
-        conn.close()
-        return rows
-
-    def get_appointments_for_doctor(self, doctor_id: str) -> List[Dict[str, Any]]:
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM appointments WHERE doctor_id = ? ORDER BY appointment_date DESC, created_at DESC", (doctor_id,))
-        rows = [dict(r) for r in cursor.fetchall()]
-        conn.close()
-        return rows
-
-    def get_all_appointments(self) -> List[Dict[str, Any]]:
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM appointments ORDER BY appointment_date DESC, created_at DESC")
-        rows = [dict(r) for r in cursor.fetchall()]
-        conn.close()
-        return rows
-
-    def cancel_appointment(self, appointment_id: str, reason: str = "", cancelled_by: str = "PATIENT") -> Tuple[bool, str]:
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM appointments WHERE appointment_id = ?", (appointment_id,))
-        apt = cursor.fetchone()
-        if not apt:
-            conn.close()
-            return False, "Appointment record not found."
-
-        cursor.execute("UPDATE appointments SET status = 'CANCELLED', reason = ? WHERE appointment_id = ?", (reason or 'Cancelled by user', appointment_id))
-        conn.commit()
-        conn.close()
-
-        self.log_audit(
-            user_id=cancelled_by,
-            role="PATIENT",
-            action="APPOINTMENT_CANCELLED",
-            entity_type="APPOINTMENT",
-            entity_id=appointment_id,
-            details=f"Appointment {appointment_id} cancelled. Reason: {reason or 'Patient schedule change'}",
-            actor_user_id=cancelled_by,
-            reason=reason
-        )
-        return True, "Appointment cancelled successfully."
-
-    def reschedule_appointment(self, appointment_id: str, new_date: str, new_slot: str, updated_by: str = "PATIENT") -> Tuple[bool, str]:
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM appointments WHERE appointment_id = ?", (appointment_id,))
-        apt = cursor.fetchone()
-        if not apt:
-            conn.close()
-            return False, "Appointment not found."
-
-        doctor_id = apt["doctor_id"]
-        # Check conflict on new slot
-        cursor.execute("""
-        SELECT appointment_id FROM appointments
-        WHERE doctor_id = ? AND appointment_date = ? AND slot_time = ? AND status IN ('CONFIRMED', 'PROPOSED') AND appointment_id != ?
-        """, (doctor_id, new_date, new_slot, appointment_id))
-        conflict = cursor.fetchone()
-        if conflict:
-            conn.close()
-            return False, f"The new requested slot ({new_slot} on {new_date}) is already booked. Please choose another slot."
-
-        cursor.execute("""
-        UPDATE appointments SET
-            appointment_date = ?,
-            slot_time = ?,
-            status = 'CONFIRMED',
-            proposed_new_date = NULL,
-            proposed_new_slot = NULL
-        WHERE appointment_id = ?
-        """, (new_date, new_slot, appointment_id))
-        conn.commit()
-        conn.close()
-
-        self.log_audit(
-            user_id=updated_by,
-            role="PATIENT",
-            action="APPOINTMENT_RESCHEDULED",
-            entity_type="APPOINTMENT",
-            entity_id=appointment_id,
-            details=f"Appointment {appointment_id} moved to {new_date} at {new_slot}.",
-            actor_user_id=updated_by
-        )
-        return True, "Appointment rescheduled successfully."
-
-    def propose_appointment_alternative(self, appointment_id: str, proposed_date: str, proposed_slot: str, proposed_by: str = "ADMIN") -> Tuple[bool, str]:
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM appointments WHERE appointment_id = ?", (appointment_id,))
-        apt = cursor.fetchone()
-        if not apt:
-            conn.close()
-            return False, "Appointment not found."
-
-        cursor.execute("""
-        UPDATE appointments SET
-            proposed_new_date = ?,
-            proposed_new_slot = ?,
-            status = 'PROPOSED'
-        WHERE appointment_id = ?
-        """, (proposed_date, proposed_slot, appointment_id))
-        conn.commit()
-        conn.close()
-
-        self.log_audit(
-            user_id=proposed_by,
-            role="ADMIN",
-            action="APPOINTMENT_ALTERNATIVE_PROPOSED",
-            entity_type="APPOINTMENT",
-            entity_id=appointment_id,
-            details=f"Alternative slot proposed for {appointment_id}: {proposed_date} at {proposed_slot}.",
-            actor_user_id=proposed_by
-        )
-        return True, f"Alternative slot proposed ({proposed_date} {proposed_slot}). Awaiting patient confirmation."
-
-    def respond_to_proposed_appointment(self, appointment_id: str, accept: bool, patient_id: str) -> Tuple[bool, str]:
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM appointments WHERE appointment_id = ?", (appointment_id,))
-        apt = cursor.fetchone()
-        if not apt:
-            conn.close()
-            return False, "Appointment not found."
-
-        if accept and apt["proposed_new_date"] and apt["proposed_new_slot"]:
-            # Confirm the proposed slot
-            cursor.execute("""
-            UPDATE appointments SET
-                appointment_date = proposed_new_date,
-                slot_time = proposed_new_slot,
-                status = 'CONFIRMED',
-                proposed_new_date = NULL,
-                proposed_new_slot = NULL
-            WHERE appointment_id = ?
-            """, (appointment_id,))
-            conn.commit()
-            conn.close()
-            return True, "Alternative appointment slot accepted and confirmed."
-        else:
-            cursor.execute("UPDATE appointments SET status = 'CANCELLED', proposed_new_date = NULL, proposed_new_slot = NULL WHERE appointment_id = ?", (appointment_id,))
-            conn.commit()
-            conn.close()
-            return True, "Proposed slot declined. Appointment cancelled."
-
-db = DatabaseManager()
->>>>>>> origin/main

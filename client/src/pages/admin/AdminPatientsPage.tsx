@@ -16,6 +16,7 @@ import {
   Trash2,
   Layers,
   FilePlus2,
+  Pencil,
   X,
 } from 'lucide-react';
 import {
@@ -40,6 +41,7 @@ export const AdminPatientsPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
+  const [editingPatient, setEditingPatient] = useState<PatientProfile | null>(null);
   const [deactivatingPatient, setDeactivatingPatient] = useState<any | null>(null);
   const [deletingPatient, setDeletingPatient] = useState<any | null>(null);
   const [expandingLimitPatient, setExpandingLimitPatient] = useState<any | null>(null);
@@ -173,6 +175,20 @@ export const AdminPatientsPage: React.FC = () => {
     loadData();
   };
 
+  const handlePatientUpdated = (updatedPatient: PatientProfile) => {
+    setPatients((prev) => prev.map((patient) =>
+      patient.patientId === updatedPatient.patientId ? updatedPatient : patient
+    ));
+    setActionSuccess(
+      isTamil
+        ? `நோயாளி ${updatedPatient.name} பதிவு புதுப்பிக்கப்பட்டது!`
+        : `Patient ${updatedPatient.name} updated successfully.`
+    );
+    setActionError(null);
+    setTimeout(() => setActionSuccess(null), 4000);
+    loadData();
+  };
+
   const activePatients = patients.filter((p) => p.activeStatus === 'ACTIVE' || p.activeStatus === 'Active' || !p.activeStatus);
   const inactivePatients = patients.filter((p) => p.activeStatus === 'INACTIVE' || p.activeStatus === 'DEACTIVATED');
   const currentList = activeTab === 'ACTIVE' ? activePatients : inactivePatients;
@@ -205,7 +221,10 @@ export const AdminPatientsPage: React.FC = () => {
 
         <div className="flex items-center gap-3">
           <button
-            onClick={() => setShowAddModal(true)}
+            onClick={() => {
+              setEditingPatient(null);
+              setShowAddModal(true);
+            }}
             className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition shadow-sm"
           >
             <Plus className="w-4 h-4" />
@@ -340,6 +359,19 @@ export const AdminPatientsPage: React.FC = () => {
                     )}
                   </td>
                   <td className="py-3 px-4 text-right space-x-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingPatient(p);
+                        setShowAddModal(true);
+                        setActionError(null);
+                      }}
+                      className="p-1.5 text-xs text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 rounded-lg inline-flex items-center gap-1 font-semibold"
+                      title="Edit patient record"
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                      <span>Edit</span>
+                    </button>
                     {p.activeStatus !== 'INACTIVE' && p.activeStatus !== 'DEACTIVATED' ? (
                       <>
                         <button
@@ -595,8 +627,13 @@ export const AdminPatientsPage: React.FC = () => {
       {/* Add Patient Modal */}
       <AddPatientModal
         isOpen={showAddModal}
-        onClose={() => setShowAddModal(false)}
+        onClose={() => {
+          setShowAddModal(false);
+          setEditingPatient(null);
+        }}
         onPatientCreated={handlePatientCreated}
+        patient={editingPatient}
+        onPatientUpdated={handlePatientUpdated}
       />
     </div>
   );

@@ -26,16 +26,13 @@ export interface ReportRecord {
   category: string;
   validationStatus?: string;
   validationReason?: string;
-<<<<<<< HEAD
+  identityStatus?: string;
   identityVerificationStatus?: string; // "VERIFIED" | "MISMATCH" | "UNVERIFIED" | "REVIEW_REQUIRED"
+  patientNameOnReport?: string;
+  identityMismatchReason?: string;
   identityMatchScore?: number;
   identityDetails?: string;
   extractedPatientName?: string;
-=======
-  identityStatus?: 'IDENTITY_VERIFIED' | 'IDENTITY_MISMATCH' | 'IDENTITY_UNVERIFIED' | 'MANUAL_REVIEW_REQUIRED' | string;
-  patientNameOnReport?: string;
-  identityMismatchReason?: string;
->>>>>>> origin/main
 }
 
 export interface PatientProfile {
@@ -47,6 +44,7 @@ export interface PatientProfile {
   email?: string;
   activeStatus: string;
   doctorInCharge: string;
+  assignedDoctorId?: string;
   specialty: string;
   totalReports?: number;
   firstReportDate?: string;

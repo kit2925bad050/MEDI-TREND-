@@ -3,6 +3,7 @@ import sys
 import unittest
 import io
 import json
+import uuid
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 from fastapi.testclient import TestClient
@@ -37,7 +38,7 @@ def generate_pdf_bytes(
     """Generates authentic PDF bytes with clinical test metadata and results."""
     buffer = io.BytesIO()
     c = canvas.Canvas(buffer, pagesize=letter)
-    
+
     for page_num in range(1, pages + 1):
         c.drawString(50, 750, f"METROPOLIS CLINICAL DIAGNOSTIC LABORATORY (PAGE {page_num})")
         if patient_name:
@@ -46,7 +47,7 @@ def generate_pdf_bytes(
         c.drawString(50, 700, f"Report Date: {report_date}")
         c.drawString(50, 680, "----------------------------------------------------------------------")
         c.drawString(50, 660, "INVESTIGATION                     RESULT     UNIT        REFERENCE")
-        
+
         y = 635
         if lines:
             for line in lines:
@@ -64,7 +65,7 @@ def generate_pdf_bytes(
                 y -= 25
                 c.drawString(50, y, "Blood Urea Nitrogen               14.0       mg/dL       7 - 20")
         c.showPage()
-    
+
     c.save()
     buffer.seek(0)
     return buffer.getvalue()
@@ -428,18 +429,26 @@ class AdvancedMedicalAnalysisTestSuite(unittest.TestCase):
         """Scenario 4: Report belonging to different patient flagged and rejected."""
         pat = db.create_patient({"full_name": "Gurumoorthy", "age": 45, "gender": "Male", "phone": "9444411111", "email": "g@test.org"})
         pid = pat["patient_id"]
+        doctor = db.create_doctor({
+            "full_name": "Upload Regression Doctor",
+            "email": f"upload.regression.{uuid.uuid4().hex}@testlab.org",
+        })
+        token = db.create_session(doctor["doctor_id"], "DOCTOR", doctor["full_name"])
         try:
             pdf_bytes = generate_pdf_bytes(patient_name="Ramesh Kumar", report_date="2026-02-14")
             res = self.client.post(
                 f"/api/patients/{pid}/reports/upload",
                 files={"file": ("ramesh_report.pdf", pdf_bytes, "application/pdf")},
-                data={"reportCategory": "Lab Report", "provider": "Central Diagnostics"}
+                data={"reportCategory": "Lab Report", "provider": "Central Diagnostics"},
+                headers={"Authorization": f"Bearer {token}"},
             )
             # Gate 6 in upload rejects mismatch with 422 Unprocessable Entity and PATIENT_NAME_MISMATCH
             self.assertEqual(res.status_code, 422)
             data = res.json()
             self.assertIn("PATIENT_NAME_MISMATCH", data.get("error_code", "") or str(data))
         finally:
+            db.revoke_session(token)
+            db.delete_doctor(doctor["doctor_id"])
             db.delete_patient(pid)
 
     def test_scenario_05_report_without_readable_patient_name(self):

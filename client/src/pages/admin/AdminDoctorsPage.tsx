@@ -20,11 +20,13 @@ import {
   Calendar,
   Users,
   Activity,
+  Pencil,
   X,
 } from 'lucide-react';
 import {
   fetchDoctors,
   createDoctor,
+  updateDoctor,
   resetUserPassword,
   deactivateDoctor,
   restoreDoctor,
@@ -42,6 +44,7 @@ export const AdminDoctorsPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
+  const [editingDoc, setEditingDoc] = useState<any | null>(null);
   const [resettingDoc, setResettingDoc] = useState<any | null>(null);
   const [deactivatingDoc, setDeactivatingDoc] = useState<any | null>(null);
   const [deletingDoc, setDeletingDoc] = useState<any | null>(null);
@@ -79,64 +82,76 @@ export const AdminDoctorsPage: React.FC = () => {
     loadData();
   }, []);
 
-  const handleCreate = async (e: React.FormEvent) => {
+  const handleSaveDoctor = async (e: React.FormEvent) => {
     e.preventDefault();
-<<<<<<< HEAD
     setCreating(true);
     setActionError(null);
-=======
-    setFormSubmitting(true);
-    setFormError(null);
->>>>>>> origin/main
     try {
-      const created = await createDoctor({
+      const doctorData = {
         full_name: fullName,
         email,
         specialization: specialty,
         department,
         phone,
-        password,
-      });
+      };
+      if (editingDoc) {
+        await updateDoctor(editingDoc.doctor_id, doctorData);
+      } else {
+        await createDoctor({ ...doctorData, password });
+      }
       setShowAddModal(false);
+      setEditingDoc(null);
       setFullName('');
       setEmail('');
       setPhone('');
-<<<<<<< HEAD
-      setActionSuccess(isTamil ? 'மருத்துவர் வெற்றிகரமாக சேர்க்கப்பட்டார்' : 'Doctor created successfully.');
+      setActionSuccess(
+        editingDoc
+          ? (isTamil ? 'மருத்துவர் பதிவு புதுப்பிக்கப்பட்டது' : 'Doctor updated successfully.')
+          : (isTamil ? 'மருத்துவர் வெற்றிகரமாக சேர்க்கப்பட்டார்' : 'Doctor created successfully.')
+      );
       setTimeout(() => setActionSuccess(null), 3000);
       await loadData();
     } catch (err: any) {
-      setActionError(err.message || 'Failed to create doctor');
+      setActionError(err.message || (editingDoc ? 'Failed to update doctor' : 'Failed to create doctor'));
     } finally {
       setCreating(false);
-=======
-      // Immediately reflect in table
-      setDoctors((prev) => [created, ...prev.filter((d) => d.doctor_id !== created.doctor_id && d.email !== created.email)]);
-      setActionSuccess(isTamil ? 'மருத்துவர் வெற்றிகரமாக சேர்க்கப்பட்டார்' : 'Doctor created and registered successfully.');
-      setTimeout(() => setActionSuccess(null), 3500);
-      loadData();
-    } catch (err: any) {
-      setFormError(err.message || 'Failed to create doctor record.');
-    } finally {
-      setFormSubmitting(false);
     }
+  };
+
+  const handleOpenCreateModal = () => {
+    setEditingDoc(null);
+    setFullName('');
+    setEmail('');
+    setSpecialty('Cardiology');
+    setDepartment('Cardiovascular Medicine');
+    setPhone('');
+    setPassword('Doctor@2026');
+    setActionError(null);
+    setShowAddModal(true);
+  };
+
+  const handleOpenEditModal = (doc: any) => {
+    setEditingDoc(doc);
+    setFullName(doc.full_name || '');
+    setEmail(doc.email || '');
+    setSpecialty(doc.specialization || doc.specialty || 'General Medicine');
+    setDepartment(doc.department || '');
+    setPhone(doc.phone || '');
+    setActionError(null);
+    setShowAddModal(true);
   };
 
   const handleOpenDoctorDetails = async (doc: any) => {
     setLoadingDetails(true);
+    setActionError(null);
+    setViewingDocDetails({ doctor: doc, patientsHandled: [] });
     try {
-      const details = await fetchDoctorClinicalDetails(doc.doctor_id);
-      setViewingDocDetails(details);
-    } catch (e) {
-      setViewingDocDetails({
-        doctor: doc,
-        patientsHandled: [],
-        patientCount: 0,
-        reportsCount: 0,
-      });
+      setViewingDocDetails(await fetchDoctorClinicalDetails(doc.doctor_id));
+    } catch (error) {
+      setViewingDocDetails(null);
+      setActionError(error instanceof Error ? error.message : 'Unable to load doctor details.');
     } finally {
       setLoadingDetails(false);
->>>>>>> origin/main
     }
   };
 
@@ -250,10 +265,7 @@ export const AdminDoctorsPage: React.FC = () => {
         </div>
 
         <button
-          onClick={() => {
-            setShowAddModal(true);
-            setFormError(null);
-          }}
+          onClick={handleOpenCreateModal}
           className="flex items-center justify-center gap-2 px-4 py-2.5 bg-brand-600 text-white font-semibold text-xs rounded-xl shadow-md hover:bg-brand-700 transition"
         >
           <Plus className="w-4 h-4" />
@@ -393,6 +405,15 @@ export const AdminDoctorsPage: React.FC = () => {
                     </td>
                   )}
                   <td className="py-3 px-4 text-right space-x-1">
+                    <button
+                      type="button"
+                      onClick={() => handleOpenEditModal(doc)}
+                      className="p-1.5 text-xs text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 rounded-lg inline-flex items-center gap-1 font-semibold"
+                      title="Edit doctor profile"
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                      <span>Edit</span>
+                    </button>
                     <button
                       onClick={() => handleOpenDoctorDetails(doc)}
                       className="p-1.5 text-xs text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 rounded-lg inline-flex items-center gap-1 font-semibold"
@@ -714,42 +735,19 @@ export const AdminDoctorsPage: React.FC = () => {
 
       {/* Add Doctor Modal */}
       {showAddModal && (
-<<<<<<< HEAD
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
           <div className="bg-white dark:bg-slate-900 w-full max-w-md rounded-2xl border border-slate-200 dark:border-slate-800 p-6 shadow-2xl">
             <h2 className="text-lg font-bold text-slate-900 dark:text-white mb-4">
-              {isTamil ? 'புதிய மருத்துவரைச் சேர்க்க' : 'Add New Physician'}
+              {editingDoc
+                ? (isTamil ? 'மருத்துவர் விவரங்களைத் திருத்து' : 'Edit Physician')
+                : (isTamil ? 'புதிய மருத்துவரைச் சேர்க்க' : 'Add New Physician')}
             </h2>
             {actionError && (
               <div role="alert" className="mb-3 p-3 rounded-xl bg-red-50 dark:bg-red-950/50 text-xs text-red-700 dark:text-red-300">
                 {actionError}
               </div>
             )}
-            <form onSubmit={handleCreate} className="space-y-3">
-=======
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fadeIn">
-          <div className="bg-white dark:bg-slate-900 w-full max-w-md rounded-3xl border border-slate-200 dark:border-slate-800 p-6 shadow-2xl">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-bold text-slate-900 dark:text-white">
-                {isTamil ? 'புதிய மருத்துவரைச் சேர்க்க' : 'Add New Physician'}
-              </h2>
-              <button
-                onClick={() => setShowAddModal(false)}
-                className="p-1.5 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {formError && (
-              <div className="mb-4 p-3 rounded-2xl bg-red-50 dark:bg-red-950/60 border border-red-200 dark:border-red-900/60 text-xs text-red-700 dark:text-red-300 flex items-center gap-2">
-                <AlertTriangle className="w-4 h-4 flex-shrink-0" />
-                <span>{formError}</span>
-              </div>
-            )}
-
-            <form onSubmit={handleCreate} className="space-y-3.5">
->>>>>>> origin/main
+            <form onSubmit={handleSaveDoctor} className="space-y-3">
               <div>
                 <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
                   Full Name <span className="text-red-500">*</span>
@@ -816,7 +814,7 @@ export const AdminDoctorsPage: React.FC = () => {
                 />
               </div>
 
-              <div>
+              {!editingDoc && <div>
                 <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
                   Initial Password
                 </label>
@@ -826,30 +824,26 @@ export const AdminDoctorsPage: React.FC = () => {
                   onChange={(e) => setPassword(e.target.value)}
                   className="w-full px-3 py-2 text-xs rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white font-mono focus:ring-2 focus:ring-brand-500"
                 />
-              </div>
+              </div>}
 
               <div className="flex items-center justify-end gap-2 pt-3">
                 <button
                   type="button"
-                  onClick={() => setShowAddModal(false)}
+                  onClick={() => {
+                    setShowAddModal(false);
+                    setEditingDoc(null);
+                    setActionError(null);
+                  }}
                   className="px-4 py-2 text-xs font-semibold rounded-xl text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-<<<<<<< HEAD
                   disabled={creating}
                   className="px-4 py-2 text-xs font-bold rounded-xl bg-brand-600 hover:bg-brand-700 text-white shadow-md shadow-brand-600/30 disabled:opacity-50"
                 >
-                  {creating ? 'Saving...' : 'Create Doctor'}
-=======
-                  disabled={formSubmitting}
-                  className="px-5 py-2 text-xs font-bold rounded-xl bg-brand-600 hover:bg-brand-700 text-white shadow-md shadow-brand-600/30 flex items-center gap-1.5"
-                >
-                  {formSubmitting && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
-                  <span>{formSubmitting ? 'Creating...' : 'Create Doctor'}</span>
->>>>>>> origin/main
+                  {creating ? 'Saving...' : editingDoc ? 'Save Changes' : 'Create Doctor'}
                 </button>
               </div>
             </form>

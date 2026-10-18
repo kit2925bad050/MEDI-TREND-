@@ -698,7 +698,6 @@ export async function fetchDoctors(status?: string) {
     const res = await fetch(url, {
       headers: getAuthHeaders(),
     });
-<<<<<<< HEAD
     return await readApiResponse<any[]>(res, 'Unable to load doctors.');
   } catch (error) {
     throw apiConnectionError(error);
@@ -716,206 +715,37 @@ export async function createDoctor(data: any) {
   } catch (error) {
     throw apiConnectionError(error);
   }
-=======
-    const json = await safeJson(res);
-    if (res.ok && Array.isArray(json)) {
-      json.forEach((d: any) => {
-        if (!deletedIds.includes(d.doctor_id) && !deletedIds.includes(d.id) && !deletedIds.includes(d.email)) {
-          mapById.set(d.doctor_id || d.id, d);
-        }
-      });
-    }
-  } catch (e) {
-    console.warn('Backend /admin/doctors fetch fallback:', e);
-  }
-
-  // 2. Supabase Direct Query Fallback
-  try {
-    let query = supabase.from('doctors').select('*');
-    if (status) {
-      query = query.eq('status', status.toUpperCase());
-    }
-    const { data: supaDocs, error } = await query;
-    if (!error && supaDocs && supaDocs.length > 0) {
-      supaDocs.forEach((d: any) => {
-        if (!deletedIds.includes(d.doctor_id) && !deletedIds.includes(d.id) && !deletedIds.includes(d.email)) {
-          if (!mapById.has(d.doctor_id)) {
-            mapById.set(d.doctor_id, {
-              id: d.id,
-              doctor_id: d.doctor_id,
-              full_name: d.full_name,
-              email: d.email,
-              phone: d.phone || '',
-              specialization: d.specialization || 'General Medicine',
-              department: d.department || 'Cardiology',
-              status: d.status || 'ACTIVE',
-              deactivation_reason: d.deactivation_reason,
-              avatar_url: d.avatar_url,
-              permissions: d.permissions || ['PATIENT_VIEW', 'PATIENT_CREATE', 'REPORT_VIEW', 'REPORT_UPLOAD', 'ANALYSIS_CREATE', 'ANALYSIS_VIEW', 'REPORT_EXPORT'],
-              created_at: d.created_at,
-            });
-          }
-        }
-      });
-    }
-  } catch (e) {
-    console.warn('Supabase doctors query fallback:', e);
-  }
-
-  // 3. Merge Custom Persistent Doctors
-  customDocs.forEach((d) => {
-    if (!deletedIds.includes(d.doctor_id) && !deletedIds.includes(d.id) && !deletedIds.includes(d.email)) {
-      mapById.set(d.doctor_id, d);
-    }
-  });
-
-  // 4. Default Pre-Configured Clinical Faculty
-  const defaults = [
-    {
-      id: 'doc-001',
-      doctor_id: 'DOC-001',
-      full_name: 'Dr. Arvind Kumar',
-      email: 'dr.arvind@hospital.org',
-      phone: '+91 98401 11223',
-      specialization: 'Cardiology & Lipidology',
-      department: 'Cardiovascular Sciences',
-      status: 'ACTIVE',
-      permissions: ['PATIENT_VIEW', 'PATIENT_CREATE', 'REPORT_VIEW', 'REPORT_UPLOAD', 'ANALYSIS_CREATE', 'ANALYSIS_VIEW', 'REPORT_EXPORT'],
-      created_at: '2026-01-10T10:00:00Z',
-    },
-  ];
-
-  defaults.forEach((d) => {
-    if (!deletedIds.includes(d.doctor_id) && !deletedIds.includes(d.id) && !deletedIds.includes(d.email)) {
-      if (!mapById.has(d.doctor_id)) {
-        mapById.set(d.doctor_id, d);
-      }
-    }
-  });
-
-  const allList = Array.from(mapById.values());
-  return status ? allList.filter((d) => d.status === status.toUpperCase()) : allList;
 }
 
-export async function createDoctor(data: {
+export async function updateDoctor(doctorId: string, data: {
   full_name: string;
   email: string;
   phone?: string;
   specialization?: string;
   department?: string;
-  password?: string;
 }) {
-  const normEmail = data.email.trim().toLowerCase();
-  const fullName = data.full_name.trim();
-
-  if (!fullName) {
-    throw new Error('Physician full name is required.');
-  }
-  if (!normEmail || !normEmail.includes('@')) {
-    throw new Error('A valid email address is required.');
-  }
-
-  // Unmark from deleted registry
-  removeDeletedDoctorId(normEmail);
-
-  const docNum = Math.floor(100 + Math.random() * 900);
-  const doctorId = `DOC-${docNum}`;
-  removeDeletedDoctorId(doctorId);
-
-  const newDocRecord = {
-    id: `doc-${Date.now()}-${docNum}`,
-    doctor_id: doctorId,
-    full_name: fullName.startsWith('Dr.') ? fullName : `Dr. ${fullName}`,
-    email: normEmail,
-    phone: data.phone?.trim() || '',
-    specialization: data.specialization || 'General Medicine',
-    department: data.department || 'Cardiology',
-    status: 'ACTIVE',
-    permissions: ['PATIENT_VIEW', 'PATIENT_CREATE', 'REPORT_VIEW', 'REPORT_UPLOAD', 'ANALYSIS_CREATE', 'ANALYSIS_VIEW', 'REPORT_EXPORT'],
-    created_at: new Date().toISOString(),
-  };
-
-  // 1. Immediately save into persistent custom storage
-  saveCustomDoctor(newDocRecord);
-
-  // 2. Send to Backend API
   try {
-    const res = await fetch(`${API_BASE}/admin/doctors`, {
-      method: 'POST',
+    const res = await fetch(`${API_BASE}/admin/doctors/${encodeURIComponent(doctorId)}`, {
+      method: 'PUT',
       headers: getAuthHeaders(),
-      body: JSON.stringify({
-        full_name: newDocRecord.full_name,
-        email: normEmail,
-        phone: newDocRecord.phone,
-        specialization: newDocRecord.specialization,
-        department: newDocRecord.department,
-        password: data.password || 'Doctor@2026',
-      }),
+      body: JSON.stringify(data),
     });
-
-    const json = await safeJson(res);
-    if (res.ok && json) {
-      if (json.doctor_id) {
-        removeDeletedDoctorId(json.doctor_id);
-        const serverDoc = {
-          ...newDocRecord,
-          ...json,
-          doctor_id: json.doctor_id,
-          full_name: json.full_name || newDocRecord.full_name,
-        };
-        saveCustomDoctor(serverDoc);
-        return serverDoc;
-      }
-    }
-  } catch (err: any) {
-    console.warn('Backend create doctor network note:', err);
+    return await readApiResponse<any>(res, 'Failed to update doctor record.');
+  } catch (error) {
+    throw apiConnectionError(error);
   }
-
-  // 3. Direct Supabase Client Integration
-  try {
-    await supabase.from('doctors').insert({
-      ...newDocRecord,
-      password_hash: `sha256_${data.password || 'Doctor@2026'}`,
-    });
-  } catch (e) {
-    console.warn('Supabase direct doctor insertion note:', e);
-  }
-
-  return newDocRecord;
 }
 
-export async function deleteDoctor(doctor_id: string) {
-  // Always register in persistent local deleted tracking
-  addDeletedDoctorId(doctor_id);
-  removeCustomDoctor(doctor_id);
-
-  let message = `Doctor ${doctor_id} permanently removed from database.`;
-
-  // 1. Real Backend DELETE Request
+export async function deleteDoctor(doctorId: string) {
   try {
-    const res = await fetch(`${API_BASE}/admin/doctors/${encodeURIComponent(doctor_id)}`, {
+    const res = await fetch(`${API_BASE}/admin/doctors/${encodeURIComponent(doctorId)}`, {
       method: 'DELETE',
       headers: getAuthHeaders(),
     });
-    const json = await safeJson(res);
-    if (res.ok && json?.message) {
-      message = json.message;
-    }
-  } catch (e) {
-    console.warn('Backend doctor delete API call error:', e);
+    return await readApiResponse<BaseApiResponse>(res, 'Failed to delete doctor.');
+  } catch (error) {
+    throw apiConnectionError(error);
   }
-
-  // 2. Direct Supabase Deletion
-  try {
-    await supabase.from('doctors').delete().or(`doctor_id.eq.${doctor_id},id.eq.${doctor_id},email.eq.${doctor_id}`);
-    await supabase.from('doctor_availability').delete().eq('doctor_id', doctor_id);
-    await supabase.from('appointments').delete().eq('doctor_id', doctor_id);
-  } catch (e) {
-    console.warn('Supabase direct doctor deletion error:', e);
-  }
-
-  return { success: true, message, doctor_id };
->>>>>>> origin/main
 }
 
 export async function deactivateDoctor(doctor_id: string, reason: string) {
@@ -1004,35 +834,10 @@ export async function fetchStaff(status?: string) {
     const res = await fetch(url, {
       headers: getAuthHeaders(),
     });
-<<<<<<< HEAD
     return await readApiResponse<any[]>(res, 'Unable to load staff.');
   } catch (error) {
     throw apiConnectionError(error);
   }
-=======
-    const json = await safeJson(res);
-    if (json && Array.isArray(json) && json.length > 0) return json;
-  } catch {}
-
-  try {
-    const { data: supaStaff } = await supabase.from('staff').select('*');
-    if (supaStaff && supaStaff.length > 0) return supaStaff;
-  } catch {}
-
-  return [
-    {
-      id: 'stf-001',
-      staff_id: 'STF-001',
-      full_name: 'Priya Raman',
-      email: 'priya.staff@hospital.org',
-      phone: '+91 98401 55667',
-      department: 'Clinical Diagnostics & Pathology',
-      status: 'ACTIVE',
-      permissions: ['PATIENT_VIEW', 'REPORT_VIEW', 'REPORT_UPLOAD'],
-      created_at: '2026-01-12T09:00:00Z',
-    },
-  ];
->>>>>>> origin/main
 }
 
 export async function createStaff(data: any) {
@@ -1042,36 +847,10 @@ export async function createStaff(data: any) {
       headers: getAuthHeaders(),
       body: JSON.stringify(data),
     });
-<<<<<<< HEAD
     return await readApiResponse<BaseApiResponse>(res, 'Failed to create staff member.');
   } catch (error) {
     throw apiConnectionError(error);
   }
-=======
-    const json = await safeJson(res);
-    if (res.ok && json) return json;
-    if (json?.detail && res.status !== 405) throw new Error(json.detail);
-  } catch (e: any) {
-    if (e.message && !e.message.includes('fetch')) throw e;
-  }
-
-  try {
-    const newStaff = {
-      id: `stf-${Date.now()}`,
-      staff_id: `STF-${Math.floor(100 + Math.random() * 900)}`,
-      full_name: data.full_name,
-      email: data.email.toLowerCase().trim(),
-      phone: data.phone || '',
-      password_hash: `sha256_${data.password || 'Staff@2026'}`,
-      department: data.department || 'Clinical Diagnostics',
-      status: 'ACTIVE',
-    };
-    await supabase.from('staff').insert(newStaff);
-    return { success: true, message: 'Staff member created successfully.', staff: newStaff };
-  } catch {}
-
-  return { success: true, message: 'Staff member registered.' };
->>>>>>> origin/main
 }
 
 export async function deactivateStaff(staff_id: string, reason: string) {
@@ -1177,7 +956,6 @@ export async function restorePatient(patient_id: string, reason: string = '') {
 }
 
 // ==================== PATIENTS APIS (REAL DB & SUPABASE) ====================
-<<<<<<< HEAD
 export async function fetchPatients(includeInactive = false): Promise<PatientProfile[]> {
   try {
     const route = includeInactive ? '/admin/patients' : '/patients';
@@ -1185,37 +963,6 @@ export async function fetchPatients(includeInactive = false): Promise<PatientPro
     const list = await readApiResponse<any[]>(res, 'Unable to load patients.');
     if (!Array.isArray(list)) {
       throw new Error('The server returned an invalid patient list.');
-=======
-export async function fetchPatients(): Promise<PatientProfile[]> {
-  const deletedIds = getDeletedPatientIds();
-  const customPats = getCustomPatients();
-  const mapById = new Map<string, PatientProfile>();
-
-  // 1. Fetch Real Backend Patients
-  try {
-    const res = await fetch(`${API_BASE}/patients`);
-    const list = await safeJson(res);
-    if (res.ok && Array.isArray(list)) {
-      list.forEach((p: any) => {
-        const pid = p.patient_id || p.patientId || p.id;
-        if (!deletedIds.includes(pid) && !deletedIds.includes(p.email)) {
-          mapById.set(pid, {
-            patientId: pid,
-            name: p.full_name || p.name,
-            age: p.age,
-            gender: p.gender,
-            phone: p.phone,
-            email: p.email,
-            activeStatus: p.status || p.activeStatus || 'Active',
-            doctorInCharge: p.assigned_doctor_id || p.doctorInCharge || 'Dr. Arvind Kumar',
-            specialty: 'Cardiology & Medicine',
-            totalReports: p.total_reports || p.totalReports || 0,
-            avatarUrl: p.avatar_url || p.avatarUrl,
-            bloodGroup: p.blood_group || p.bloodGroup || 'B+',
-          });
-        }
-      });
->>>>>>> origin/main
     }
     return list.map((p: any) => ({
       patientId: p.patient_id,
@@ -1226,6 +973,7 @@ export async function fetchPatients(): Promise<PatientProfile[]> {
       email: p.email,
       activeStatus: p.status,
       doctorInCharge: p.assigned_doctor_name || p.assigned_doctor_id || '',
+      assignedDoctorId: p.assigned_doctor_id || '',
       specialty: p.assigned_doctor_specialty || '',
       totalReports: p.total_reports || 0,
       avatarUrl: p.avatar_url,
@@ -1234,57 +982,6 @@ export async function fetchPatients(): Promise<PatientProfile[]> {
   } catch (error) {
     throw apiConnectionError(error);
   }
-<<<<<<< HEAD
-=======
-
-  // 2. Supabase Fallback
-  try {
-    const { data: supaPatients, error } = await supabase.from('patients').select('*');
-    if (!error && supaPatients && supaPatients.length > 0) {
-      supaPatients.forEach((p: any) => {
-        const pid = p.patient_id || p.id;
-        if (!deletedIds.includes(pid) && !deletedIds.includes(p.email)) {
-          if (!mapById.has(pid)) {
-            mapById.set(pid, {
-              patientId: pid,
-              name: p.full_name,
-              age: p.age,
-              gender: p.gender,
-              phone: p.phone,
-              email: p.email,
-              activeStatus: p.status || 'Active',
-              doctorInCharge: p.assigned_doctor_id || 'Dr. Arvind Kumar',
-              specialty: 'Cardiology & Medicine',
-              totalReports: 0,
-              avatarUrl: p.avatar_url,
-              bloodGroup: p.blood_group || 'O+',
-            });
-          }
-        }
-      });
-    }
-  } catch (e) {
-    console.warn('Supabase /patients query fallback:', e);
-  }
-
-  // 3. Merge Custom Persistent Patients
-  customPats.forEach((p) => {
-    if (!deletedIds.includes(p.patientId) && (p.email ? !deletedIds.includes(p.email) : true)) {
-      mapById.set(p.patientId, p);
-    }
-  });
-
-  // 4. Default Pre-Configured Patients
-  DEFAULT_PATIENTS.forEach((p) => {
-    if (!deletedIds.includes(p.patientId) && (p.email ? !deletedIds.includes(p.email) : true)) {
-      if (!mapById.has(p.patientId)) {
-        mapById.set(p.patientId, p);
-      }
-    }
-  });
-
-  return Array.from(mapById.values());
->>>>>>> origin/main
 }
 
 export async function createPatient(data: {
@@ -1296,7 +993,6 @@ export async function createPatient(data: {
   blood_group?: string;
   assigned_doctor_id?: string;
 }): Promise<PatientProfile> {
-<<<<<<< HEAD
   try {
     const res = await fetch(`${API_BASE}/patients`, {
       method: 'POST',
@@ -1316,6 +1012,46 @@ export async function createPatient(data: {
       email: p.email,
       activeStatus: p.status,
       doctorInCharge: p.assigned_doctor_name || p.assigned_doctor_id || '',
+      assignedDoctorId: p.assigned_doctor_id || '',
+      specialty: p.assigned_doctor_specialty || '',
+      totalReports: p.total_reports || 0,
+      avatarUrl: p.avatar_url,
+      bloodGroup: p.blood_group,
+    };
+  } catch (error) {
+    throw apiConnectionError(error);
+  }
+}
+
+export async function updatePatient(patientId: string, data: {
+  full_name: string;
+  age: number;
+  gender: string;
+  phone: string;
+  email?: string;
+  blood_group?: string;
+  assigned_doctor_id?: string;
+}): Promise<PatientProfile> {
+  try {
+    const res = await fetch(`${API_BASE}/admin/patients/${encodeURIComponent(patientId)}`, {
+      method: 'PUT',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(data),
+    });
+    const p = await readApiResponse<any>(res, 'Failed to update patient record.');
+    if (!p.patient_id) {
+      throw new Error('The server did not confirm that the patient record was updated.');
+    }
+    return {
+      patientId: p.patient_id,
+      name: p.full_name,
+      age: p.age,
+      gender: p.gender,
+      phone: p.phone,
+      email: p.email,
+      activeStatus: p.status,
+      doctorInCharge: p.assigned_doctor_name || p.assigned_doctor_id || '',
+      assignedDoctorId: p.assigned_doctor_id || '',
       specialty: p.assigned_doctor_specialty || '',
       totalReports: p.total_reports || 0,
       avatarUrl: p.avatar_url,
@@ -1333,82 +1069,6 @@ export async function fetchAssignableDoctors(): Promise<Array<{ doctor_id: strin
   } catch (error) {
     throw apiConnectionError(error);
   }
-=======
-  const normEmail = data.email?.trim().toLowerCase() || '';
-  const patNum = Math.floor(1000 + Math.random() * 9000);
-  const newId = `PT-${Date.now().toString().slice(-4)}${patNum.toString().slice(-2)}`;
-  removeDeletedPatientId(newId);
-
-  const newPatientRecord: PatientProfile = {
-    patientId: newId,
-    name: data.full_name.trim(),
-    age: data.age,
-    gender: data.gender,
-    phone: data.phone.trim(),
-    email: normEmail || undefined,
-    activeStatus: 'Active',
-    doctorInCharge: data.assigned_doctor_id || 'Dr. Arvind Kumar',
-    specialty: 'Cardiology & Medicine',
-    totalReports: 0,
-    bloodGroup: data.blood_group || 'O+',
-  };
-
-  // 1. Immediately save into persistent custom storage
-  saveCustomPatient(newPatientRecord);
-
-  // 2. Try Backend API
-  try {
-    const res = await fetch(`${API_BASE}/patients`, {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify({
-        ...data,
-        patient_id: newId,
-      }),
-    });
-    const p = await safeJson(res);
-    if (res.ok && p && (p.patient_id || p.patientId)) {
-      const confirmedId = p.patient_id || p.patientId || newId;
-      removeDeletedPatientId(confirmedId);
-      const serverPatient: PatientProfile = {
-        ...newPatientRecord,
-        patientId: confirmedId,
-        name: p.full_name || newPatientRecord.name,
-        age: p.age || newPatientRecord.age,
-        gender: p.gender || newPatientRecord.gender,
-        phone: p.phone || newPatientRecord.phone,
-        email: p.email || newPatientRecord.email,
-        activeStatus: p.status || newPatientRecord.activeStatus,
-        doctorInCharge: p.assigned_doctor_id || newPatientRecord.doctorInCharge,
-        bloodGroup: p.blood_group || newPatientRecord.bloodGroup,
-      };
-      saveCustomPatient(serverPatient);
-      return serverPatient;
-    }
-  } catch (err: any) {
-    console.warn('Backend patient registration network note:', err);
-  }
-
-  // 3. Direct Supabase Persistence
-  try {
-    await supabase.from('patients').insert({
-      id: `pat-${Date.now()}`,
-      patient_id: newId,
-      full_name: newPatientRecord.name,
-      age: newPatientRecord.age,
-      gender: newPatientRecord.gender,
-      phone: newPatientRecord.phone,
-      email: normEmail || null,
-      blood_group: newPatientRecord.bloodGroup,
-      status: 'Active',
-      assigned_doctor_id: newPatientRecord.doctorInCharge,
-    });
-  } catch (e) {
-    console.warn('Supabase direct patient insertion fallback note:', e);
-  }
-
-  return newPatientRecord;
->>>>>>> origin/main
 }
 
 export async function updatePatientAvatar(patientId: string, avatarUrl: string | null) {
@@ -1431,7 +1091,6 @@ export async function fetchPatientReports(patientId: string): Promise<ReportReco
 
   // 1. Fetch Real Backend Reports
   try {
-<<<<<<< HEAD
     const res = await fetch(`${API_BASE}/patients/${encodeURIComponent(patientId)}/reports`, { headers: getAuthHeaders() });
     const list = await readApiResponse<any[]>(res, 'Unable to load medical reports.');
     if (!Array.isArray(list)) {
@@ -1464,107 +1123,6 @@ export async function fetchPatientReports(patientId: string): Promise<ReportReco
   } catch (error) {
     throw apiConnectionError(error);
   }
-=======
-    const res = await fetch(`${API_BASE}/patients/${encodeURIComponent(patientId)}/reports`);
-    const list = await safeJson(res);
-    if (res.ok && Array.isArray(list)) {
-      list.forEach((r: any) => {
-        const rid = r.report_id || r.reportId;
-        if (!deletedReportIds.includes(rid)) {
-          mapById.set(rid, {
-            reportId: rid,
-            patientId: r.patient_id || r.patientId || patientId,
-            reportDate: r.report_date || r.reportDate,
-            uploadDate: r.upload_date || r.uploadDate,
-            provider: r.provider,
-            originalPdfPath: r.file_path || r.originalPdfPath,
-            extractedParameters: (r.extractedParameters || []).map((p: any) => ({
-              parameterName: p.parameter_name || p.parameterName,
-              canonicalName: p.canonical_name || p.canonicalName || p.parameter_name,
-              value: Number(p.value),
-              unit: p.unit || '',
-              referenceRange: p.reference_range || p.referenceRange || '',
-              status: p.status || 'Normal',
-              reportId: rid,
-              reportDate: r.report_date || r.reportDate,
-              sourcePage: p.source_page || p.sourcePage || 1,
-              sourceText: p.source_text || p.sourceText,
-              category: p.category,
-            })),
-            extractionStatus: r.extraction_status || r.extractionStatus || 'Verified',
-            parameterCount: r.parameter_count || (r.extractedParameters || []).length,
-            category: r.category,
-            identityStatus: r.identity_status || r.identityStatus || 'IDENTITY_VERIFIED',
-            patientNameOnReport: r.patient_name_on_report || r.patientNameOnReport,
-          });
-        }
-      });
-    }
-  } catch (e) {
-    console.warn('Backend /reports fetch note:', e);
-  }
-
-  // 2. Fetch from Supabase
-  try {
-    const { data: supaReports, error } = await supabase
-      .from('medical_reports')
-      .select('*')
-      .eq('patient_id', patientId);
-    if (!error && supaReports && supaReports.length > 0) {
-      supaReports.forEach((r: any) => {
-        const rid = r.report_id || r.id;
-        if (!deletedReportIds.includes(rid) && !mapById.has(rid)) {
-          mapById.set(rid, {
-            reportId: rid,
-            patientId: r.patient_id,
-            reportDate: r.report_date,
-            uploadDate: r.upload_date,
-            provider: r.provider,
-            originalPdfPath: r.file_path,
-            extractedParameters: (r.extracted_parameters || []).map((p: any) => ({
-              parameterName: p.parameter_name || p.parameterName,
-              canonicalName: p.canonical_name || p.canonicalName || p.parameter_name,
-              value: Number(p.value),
-              unit: p.unit || '',
-              referenceRange: p.reference_range || p.referenceRange || '',
-              status: p.status || 'Normal',
-              reportId: rid,
-              reportDate: r.report_date,
-              sourcePage: p.source_page || 1,
-              sourceText: p.source_text,
-              category: p.category,
-            })),
-            extractionStatus: r.extraction_status || 'Verified',
-            parameterCount: r.parameter_count || (r.extracted_parameters || []).length,
-            category: r.category,
-          });
-        }
-      });
-    }
-  } catch (e) {
-    console.warn('Supabase medical_reports query note:', e);
-  }
-
-  // 3. Merge Custom Persistent Reports for this specific patient
-  customReports.forEach((r) => {
-    if (!deletedReportIds.includes(r.reportId)) {
-      mapById.set(r.reportId, r);
-    }
-  });
-
-  // 4. Default Seeded Reports ONLY for patient PT-E77688
-  if (patientId === 'PT-E77688') {
-    const seeded = DEFAULT_REPORTS['PT-E77688'] || [];
-    seeded.forEach((r) => {
-      if (!deletedReportIds.includes(r.reportId) && !mapById.has(r.reportId)) {
-        mapById.set(r.reportId, r);
-      }
-    });
-  }
-
-  // Strictly filter by patientId to prevent ANY cross-patient data leakage
-  return Array.from(mapById.values()).filter((r) => r.patientId === patientId);
->>>>>>> origin/main
 }
 
 export async function analyzeReports(
@@ -1593,7 +1151,6 @@ export async function analyzeReports(
     console.warn('Backend /analyze fetch note:', e);
   }
 
-<<<<<<< HEAD
   // Analysis could not be produced from the stored reports and AI providers.
   // Do NOT fabricate clinical findings. Surface an explicit unavailable state
   // so the UI can show a clear message instead of invented lab values.
@@ -1603,259 +1160,12 @@ export async function analyzeReports(
     + 'interpretation has been generated. Ensure the backend is running with a '
     + 'configured AI provider, then try again.'
   );
-=======
-  // 2. Client-Side Strict Patient-Grounded Deterministic Comparison
-  const patientReports = (await fetchPatientReports(patientId)).filter((r) =>
-    selectedReportIds.includes(r.reportId) && r.identityStatus !== 'IDENTITY_MISMATCH'
-  );
-
-  if (patientReports.length < 1) {
-    throw new Error('Please select at least 1 verified report belonging to the selected patient.');
-  }
-
-  // Unit normalization helper to prevent false incompatible unit errors
-  const normUnit = (u: string) => {
-    if (!u) return '';
-    const clean = u.trim().toLowerCase().replace(/\s+/g, '');
-    if (clean === 'mg/dl' || clean === 'mg%' || clean === 'mg/100ml') return 'mg/dL';
-    if (clean === '%' || clean === '%hba1c') return '%';
-    if (clean === 'g/dl' || clean === 'gm/dl') return 'g/dL';
-    if (clean === 'u/l' || clean === 'iu/l') return 'U/L';
-    if (clean === 'cells/cumm' || clean === 'cells/mcl' || clean === '/cumm') return 'cells/μL';
-    return clean;
-  };
-
-  // MODE A: Single Report Clinical Intelligence Evaluation
-  if (patientReports.length === 1) {
-    const rep = patientReports[0];
-    const params = rep.extractedParameters || [];
-    const comps = params.map((p) => {
-      const isElevated = p.status === 'Elevated' || p.status === 'High' || p.status === 'Critical';
-      const isLow = p.status === 'Low';
-      const traj = isElevated || isLow ? 'Needs Monitoring' : 'Stable';
-      return {
-        name: p.parameterName,
-        canonicalName: p.canonicalName || p.parameterName,
-        unit: p.unit || '',
-        beforeValue: null,
-        afterValue: Number(p.value),
-        baselineReportId: rep.reportId,
-        followUpReportId: rep.reportId,
-        baselineDate: rep.reportDate,
-        followUpDate: rep.reportDate,
-        absoluteChange: null,
-        percentageChange: null,
-        percentChange: null,
-        direction: isElevated ? 'ELEVATED' : isLow ? 'LOW' : 'STABLE',
-        trajectory: traj,
-        clinicalInterpretation: `Observed at ${p.value} ${p.unit} (Ref: ${p.referenceRange || 'Standard'}). Clinical correlation advised.`,
-        referenceRange: p.referenceRange || '',
-        history: [{
-          reportId: rep.reportId,
-          reportDate: rep.reportDate,
-          provider: rep.provider,
-          value: Number(p.value),
-          unit: p.unit || ''
-        }],
-        trendHistory: [{
-          reportId: rep.reportId,
-          reportDate: rep.reportDate,
-          provider: rep.provider,
-          value: Number(p.value),
-          unit: p.unit || ''
-        }]
-      };
-    });
-
-    return {
-      analysisId: `ANA-${Date.now().toString().slice(-6)}`,
-      patientId,
-      patientName: '',
-      selectedReportIds,
-      analysisDate: new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }),
-      comparisonSummary: {
-        improved: 0,
-        stable: comps.filter((c) => c.trajectory === 'Stable').length,
-        monitoring: comps.filter((c) => c.trajectory === 'Needs Monitoring').length,
-        worsened: 0,
-      },
-      comparisons: [],
-      keyParameters: comps,
-      overallFindings: comps.map((c) => `${c.canonicalName}: ${c.afterValue} ${c.unit} (Status: ${c.direction})`),
-      englishSummary: [
-        `Single-document clinical intelligence evaluation performed for report ${rep.reportId} (${rep.reportDate}).`,
-        `Identified ${params.length} laboratory biomarkers. Evaluated against biological laboratory reference ranges.`,
-        'Recommendation: Review findings in clinical correlation with attending physician.'
-      ],
-      tamilSummary: [
-        `மருத்துவ அறிக்கை ${rep.reportId} (${rep.reportDate}) ஆய்வு செய்யப்பட்டது.`,
-        `கண்டறியப்பட்ட ${params.length} மருத்துவ அளவீடுகள் நிலையான மருத்துவ வரம்புகளுடன் ஒப்பிடப்பட்டுள்ளன.`,
-        'மருத்துவ அறிக்கைகளை மருத்துவர் மேற்பார்வையுடன் ஆலோசிக்க பரிந்துரைக்கப்படுகிறது.'
-      ],
-      monitoringItems: [],
-      notComparable: [],
-      providerUsed: 'MEDI-TREND Clinical Intelligence Engine',
-      fallbackTriggered: false,
-      fallbackHistory: [],
-      executionLatencyMs: 110,
-      auditLogId: `AUD-${Date.now().toString().slice(-6)}`,
-    };
-  }
-
-  // MODE B: Multi-Report Longitudinal Comparison (2, 5, 10+ reports)
-  const sortedReports = [...patientReports].sort((a, b) =>
-    new Date(a.reportDate).getTime() - new Date(b.reportDate).getTime()
-  );
-
-  const baselineRep = sortedReports[0];
-  const followUpRep = sortedReports[sortedReports.length - 1];
-
-  const baselineParams = baselineRep.extractedParameters || [];
-  const followUpParams = followUpRep.extractedParameters || [];
-
-  const comps: any[] = [];
-  let improvedCount = 0;
-  let stableCount = 0;
-  let monitoringCount = 0;
-  let worsenedCount = 0;
-
-  for (const bParam of baselineParams) {
-    const match = followUpParams.find(
-      (f) =>
-        f.canonicalName.toLowerCase() === bParam.canonicalName.toLowerCase() ||
-        f.parameterName.toLowerCase() === bParam.parameterName.toLowerCase()
-    );
-
-    if (match) {
-      const beforeVal = Number(bParam.value);
-      const afterVal = Number(match.value);
-      const absChange = Math.round((afterVal - beforeVal) * 10) / 10;
-      const pctChange = beforeVal !== 0 ? Math.round(((afterVal - beforeVal) / beforeVal) * 1000) / 10 : 0;
-
-      // Determine clinical trajectory
-      let dir: 'IMPROVED' | 'STABLE' | 'WORSENED' | 'MONITORING' = 'STABLE';
-      let interp = 'Observed stable longitudinal biomarker trajectory within acceptable variance.';
-      const cName = (bParam.canonicalName || bParam.parameterName).toLowerCase();
-
-      if (cName.includes('cholesterol') || cName.includes('ldl') || cName.includes('triglyceride') || cName.includes('hba1c') || cName.includes('glucose') || cName.includes('crp')) {
-        if (cName.includes('hdl')) {
-          if (afterVal > beforeVal) {
-            dir = 'IMPROVED';
-            interp = `Favorable increase in protective lipoprotein level (+${pctChange}%).`;
-            improvedCount++;
-          } else if (afterVal < beforeVal) {
-            dir = 'WORSENED';
-            interp = `Decrease in protective biomarker level (${pctChange}%).`;
-            worsenedCount++;
-          } else {
-            stableCount++;
-          }
-        } else {
-          if (afterVal < beforeVal) {
-            dir = 'IMPROVED';
-            interp = `Favorable reduction in risk biomarker level (${pctChange}%).`;
-            improvedCount++;
-          } else if (afterVal > beforeVal) {
-            dir = 'WORSENED';
-            interp = `Elevated biomarker level observed (+${pctChange}%). Needs clinical review.`;
-            worsenedCount++;
-          } else {
-            stableCount++;
-          }
-        }
-      } else if (Math.abs(pctChange) < 3.0) {
-        dir = 'STABLE';
-        stableCount++;
-      } else {
-        dir = 'MONITORING';
-        interp = `Biomarker shift observed (${pctChange}%). Clinical correlation advised.`;
-        monitoringCount++;
-      }
-
-      // Populate trend history across all selected reports
-      const timelineHistory = sortedReports.map((r) => {
-        const found = r.extractedParameters?.find(
-          (p) =>
-            p.canonicalName.toLowerCase() === bParam.canonicalName.toLowerCase() ||
-            p.parameterName.toLowerCase() === bParam.parameterName.toLowerCase()
-        );
-        return {
-          reportId: r.reportId,
-          reportDate: r.reportDate,
-          provider: r.provider,
-          value: found ? Number(found.value) : afterVal,
-          unit: found?.unit || match.unit || bParam.unit || ''
-        };
-      });
-
-      comps.push({
-        name: bParam.parameterName,
-        canonicalName: bParam.canonicalName || bParam.parameterName,
-        unit: match.unit || bParam.unit || '',
-        beforeValue: beforeVal,
-        afterValue: afterVal,
-        baselineReportId: baselineRep.reportId,
-        followUpReportId: followUpRep.reportId,
-        baselineDate: baselineRep.reportDate,
-        followUpDate: followUpRep.reportDate,
-        absoluteChange: absChange,
-        percentageChange: pctChange,
-        percentChange: pctChange,
-        direction: dir,
-        trajectory: dir === 'IMPROVED' ? 'improving' : dir === 'WORSENED' ? 'worsening' : 'stable',
-        clinicalInterpretation: interp,
-        referenceRange: match.referenceRange || bParam.referenceRange || '',
-        history: timelineHistory,
-        trendHistory: timelineHistory
-      });
-    }
-  }
-
-  const findings = comps.map(
-    (c) => `${c.canonicalName}: ${c.beforeValue} ${c.unit} (${c.baselineDate}) → ${c.afterValue} ${c.unit} (${c.followUpDate}) [${c.percentageChange >= 0 ? '+' : ''}${c.percentageChange}%]`
-  );
-
-  return {
-    analysisId: `ANA-${Date.now().toString().slice(-6)}`,
-    patientId,
-    patientName: '',
-    selectedReportIds,
-    analysisDate: new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }),
-    comparisonSummary: {
-      improved: improvedCount,
-      stable: stableCount,
-      monitoring: monitoringCount,
-      worsened: worsenedCount,
-    },
-    comparisons: comps,
-    keyParameters: comps,
-    overallFindings: findings.length > 0 ? findings : ['No directly comparable laboratory biomarker parameters found between the selected reports.'],
-    englishSummary: [
-      `Longitudinal comparison executed between ${baselineRep.reportId} (${baselineRep.reportDate}) and ${followUpRep.reportId} (${followUpRep.reportDate}).`,
-      `${improvedCount} parameters improved, ${stableCount} stable, ${monitoringCount} monitoring, ${worsenedCount} worsened.`,
-      'Recommendation: Review findings in clinical correlation with attending physician.'
-    ],
-    tamilSummary: [
-      `நோயாளிக்கான மருத்துவ ஒப்பீட்டு ஆய்வு ${baselineRep.reportDate} மற்றும் ${followUpRep.reportDate} அறிக்கைகளுக்கு இடையே மேற்கொள்ளப்பட்டது.`,
-      `${improvedCount} மருத்துவ அளவீடுகள் முன்னேற்றம் அடைந்துள்ளன, ${stableCount} அளவீடுகள் சீராக உள்ளன.`,
-      'மருத்துவ அறிக்கைகளை மருத்துவர் மேற்பார்வையுடன் ஒப்பிட்டு ஆலோசிக்க பரிந்துரைக்கப்படுகிறது.'
-    ],
-    monitoringItems: [],
-    notComparable: [],
-    providerUsed: 'MEDI-TREND Deterministic Longitudinal Engine',
-    fallbackTriggered: false,
-    fallbackHistory: [],
-    executionLatencyMs: 180,
-    auditLogId: `AUD-${Date.now().toString().slice(-6)}`,
-  };
->>>>>>> origin/main
 }
 
 export async function uploadReport(
   patientId: string,
   formData: FormData
 ): Promise<{ success: boolean; report: ReportRecord; validation_status?: string; message?: string }> {
-<<<<<<< HEAD
   let res: Response;
   let data: any;
   try {
@@ -1888,14 +1198,6 @@ export async function uploadReport(
   } catch (error) {
     throw apiConnectionError(error);
   }
-=======
-  const res = await fetch(`${API_BASE}/patients/${encodeURIComponent(patientId)}/upload`, {
-    method: 'POST',
-    body: formData,
-  });
-
-  const data = await safeJson(res);
->>>>>>> origin/main
 
   if (res.ok && data && data.report) {
     const r = data.report;
