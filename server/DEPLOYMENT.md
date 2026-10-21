@@ -105,8 +105,12 @@ PostgreSQL connections are cached per `DatabaseManager` instance. On Vercel serv
 ### 5. No `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`
 PostgreSQL does not support `ADD COLUMN IF NOT EXISTS` in versions before PG 9.6, and Supabase uses a recent PG version. The migration loop checks `information_schema.columns` first, then falls back to `try/except` for safety.
 
-### 6. File uploads
-Uploaded PDFs are stored on the local filesystem (`pdf_storage_dir`). On Vercel serverless, the filesystem is ephemeral. For production, configure cloud storage (Supabase Storage, S3, etc.) and update the file storage path in `main.py`.
+### 6. Monthly wound-photo uploads
+Production monthly wound photos use the configured private Supabase Storage bucket. The backend authenticates the clinician, issues a signed upload ticket, and records the photo against its visit only after confirming that the object reached storage. The browser uploads image bytes directly to Storage, avoiding Vercel Function request-body limits while supporting JPG, PNG, and WEBP files up to 20 MB each.
+
+Configure `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and `SUPABASE_STORAGE_BUCKET` on the backend. Do not expose the service-role key to the frontend. If these settings are missing on Vercel, wound-photo uploads fail with an actionable configuration error instead of being written to ephemeral storage or reported as successful. Local development without Supabase continues to use the authenticated multipart API.
+
+Medical-report upload behavior is unchanged.
 
 ### 7. AI provider API keys
 AI provider keys (`GEMINI_API_KEY`, etc.) are read from server-side environment variables only. They are never sent to the frontend.

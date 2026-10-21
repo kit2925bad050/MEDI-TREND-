@@ -15,6 +15,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { WoundVisitComparisonResult } from '../../types';
+import { getWoundImageUrl } from '../../services/api';
 import { useLanguage } from '../../context/LanguageContext';
 import { WoundLanguageMode } from '../../utils/woundTranslation';
 
@@ -39,6 +40,10 @@ export const MonthlyVisitComparisonModal: React.FC<MonthlyVisitComparisonModalPr
 
   const basePhotos = comparison.baseline_visit.photos || [];
   const currPhotos = comparison.current_visit.photos || [];
+  const baseReport = comparison.baseline_visit.analysis_result;
+  const currentReport = comparison.current_visit.analysis_result;
+  const baseRecommendations = baseReport?.clinical_recommendations;
+  const currentRecommendations = currentReport?.clinical_recommendations;
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -128,7 +133,7 @@ export const MonthlyVisitComparisonModal: React.FC<MonthlyVisitComparisonModalPr
               <div className="relative rounded-2xl overflow-hidden aspect-video bg-slate-900 flex items-center justify-center">
                 {basePhotos.length > 0 ? (
                   <img
-                    src={basePhotos[basePhotoIdx]?.image_url}
+                    src={getWoundImageUrl(basePhotos[basePhotoIdx]?.image_filename || '')}
                     alt="Previous visit photo"
                     className="w-full h-full object-contain"
                   />
@@ -170,7 +175,7 @@ export const MonthlyVisitComparisonModal: React.FC<MonthlyVisitComparisonModalPr
                         basePhotoIdx === idx ? 'border-rose-500 scale-105' : 'border-transparent opacity-70 hover:opacity-100'
                       }`}
                     >
-                      <img src={p.image_url} alt="" className="w-full h-full object-cover" />
+                      <img src={getWoundImageUrl(p.image_filename)} alt="" className="w-full h-full object-cover" />
                     </button>
                   ))}
                 </div>
@@ -182,6 +187,15 @@ export const MonthlyVisitComparisonModal: React.FC<MonthlyVisitComparisonModalPr
                   Baseline Clinical Summary:
                 </div>
                 <p>{comparison.baseline_visit.summary}</p>
+                {comparison.baseline_visit.severity_indicator && (
+                  <p className="mt-1"><b>Report severity:</b> {comparison.baseline_visit.severity_indicator}</p>
+                )}
+                {baseReport?.visible_characteristics?.primary_bed_appearance && (
+                  <p className="mt-1"><b>Visual findings:</b> {baseReport.visible_characteristics.primary_bed_appearance}</p>
+                )}
+                {Array.isArray(baseRecommendations) && baseRecommendations.length > 0 && (
+                  <p className="mt-1"><b>Report recommendations:</b> {baseRecommendations.join(' ')}</p>
+                )}
               </div>
             </div>
 
@@ -209,7 +223,7 @@ export const MonthlyVisitComparisonModal: React.FC<MonthlyVisitComparisonModalPr
               <div className="relative rounded-2xl overflow-hidden aspect-video bg-slate-900 flex items-center justify-center">
                 {currPhotos.length > 0 ? (
                   <img
-                    src={currPhotos[currPhotoIdx]?.image_url}
+                    src={getWoundImageUrl(currPhotos[currPhotoIdx]?.image_filename || '')}
                     alt="Current visit photo"
                     className="w-full h-full object-contain"
                   />
@@ -251,7 +265,7 @@ export const MonthlyVisitComparisonModal: React.FC<MonthlyVisitComparisonModalPr
                         currPhotoIdx === idx ? 'border-rose-500 scale-105' : 'border-transparent opacity-70 hover:opacity-100'
                       }`}
                     >
-                      <img src={p.image_url} alt="" className="w-full h-full object-cover" />
+                      <img src={getWoundImageUrl(p.image_filename)} alt="" className="w-full h-full object-cover" />
                     </button>
                   ))}
                 </div>
@@ -263,11 +277,32 @@ export const MonthlyVisitComparisonModal: React.FC<MonthlyVisitComparisonModalPr
                   Current Clinical Summary:
                 </div>
                 <p>{comparison.current_visit.summary}</p>
+                {comparison.current_visit.severity_indicator && (
+                  <p className="mt-1"><b>Report severity:</b> {comparison.current_visit.severity_indicator}</p>
+                )}
+                {currentReport?.visible_characteristics?.primary_bed_appearance && (
+                  <p className="mt-1"><b>Visual findings:</b> {currentReport.visible_characteristics.primary_bed_appearance}</p>
+                )}
+                {Array.isArray(currentRecommendations) && currentRecommendations.length > 0 && (
+                  <p className="mt-1"><b>Report recommendations:</b> {currentRecommendations.join(' ')}</p>
+                )}
               </div>
             </div>
           </div>
 
+          {!comparison.comparison_reliable && (
+            <div className="p-5 rounded-3xl bg-amber-50 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-800 text-sm text-amber-900 dark:text-amber-200 space-y-2">
+              <div className="font-bold flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4" />
+                Comparison inconclusive — clinical review recommended
+              </div>
+              <p>{comparison.inconclusive_reason || 'These photos and reports do not support a reliable comparison.'}</p>
+              <p>No improvement, worsening, or measurement change is inferred.</p>
+            </div>
+          )}
+
           {/* Tissue Composition Delta Comparison */}
+          {comparison.comparison_reliable && (
           <div className="p-5 rounded-3xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-4">
             <h4 className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-2">
               <Layers className="w-4 h-4 text-rose-500" />
@@ -279,13 +314,13 @@ export const MonthlyVisitComparisonModal: React.FC<MonthlyVisitComparisonModalPr
               <div className="p-3 rounded-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
                 <div className="text-[10px] uppercase font-bold text-slate-500">Granulation (Red)</div>
                 <div className="text-base font-extrabold text-rose-600 dark:text-rose-400 mt-1">
-                  {comparison.current_visit.tissue_breakdown.granulation_percent}%
+                  {comparison.current_visit.tissue_breakdown.granulation_percent ?? '—'}%
                 </div>
                 <div className="text-[11px] font-mono mt-0.5 font-bold">
-                  {comparison.tissue_changes.granulation_delta > 0 ? (
-                    <span className="text-emerald-600">+{comparison.tissue_changes.granulation_delta}%</span>
+                  {(comparison.tissue_changes.granulation_delta ?? 0) > 0 ? (
+                    <span className="text-emerald-600">+{comparison.tissue_changes.granulation_delta ?? '—'}%</span>
                   ) : (
-                    <span className="text-slate-500">{comparison.tissue_changes.granulation_delta}%</span>
+                    <span className="text-slate-500">{comparison.tissue_changes.granulation_delta ?? '—'}%</span>
                   )}
                 </div>
               </div>
@@ -294,13 +329,13 @@ export const MonthlyVisitComparisonModal: React.FC<MonthlyVisitComparisonModalPr
               <div className="p-3 rounded-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
                 <div className="text-[10px] uppercase font-bold text-slate-500">Slough (Yellow)</div>
                 <div className="text-base font-extrabold text-amber-600 dark:text-amber-400 mt-1">
-                  {comparison.current_visit.tissue_breakdown.slough_percent}%
+                  {comparison.current_visit.tissue_breakdown.slough_percent ?? '—'}%
                 </div>
                 <div className="text-[11px] font-mono mt-0.5 font-bold">
-                  {comparison.tissue_changes.slough_delta < 0 ? (
-                    <span className="text-emerald-600">{comparison.tissue_changes.slough_delta}%</span>
+                  {(comparison.tissue_changes.slough_delta ?? 0) < 0 ? (
+                    <span className="text-emerald-600">{comparison.tissue_changes.slough_delta ?? '—'}%</span>
                   ) : (
-                    <span className="text-rose-500">+{comparison.tissue_changes.slough_delta}%</span>
+                    <span className="text-rose-500">+{comparison.tissue_changes.slough_delta ?? '—'}%</span>
                   )}
                 </div>
               </div>
@@ -309,13 +344,13 @@ export const MonthlyVisitComparisonModal: React.FC<MonthlyVisitComparisonModalPr
               <div className="p-3 rounded-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
                 <div className="text-[10px] uppercase font-bold text-slate-500">Necrotic (Black/Eschar)</div>
                 <div className="text-base font-extrabold text-slate-700 dark:text-slate-300 mt-1">
-                  {comparison.current_visit.tissue_breakdown.necrotic_percent}%
+                  {comparison.current_visit.tissue_breakdown.necrotic_percent ?? '—'}%
                 </div>
                 <div className="text-[11px] font-mono mt-0.5 font-bold">
-                  {comparison.tissue_changes.necrotic_delta <= 0 ? (
-                    <span className="text-emerald-600">{comparison.tissue_changes.necrotic_delta}%</span>
+                  {(comparison.tissue_changes.necrotic_delta ?? 0) <= 0 ? (
+                    <span className="text-emerald-600">{comparison.tissue_changes.necrotic_delta ?? '—'}%</span>
                   ) : (
-                    <span className="text-rose-600">+{comparison.tissue_changes.necrotic_delta}%</span>
+                    <span className="text-rose-600">+{comparison.tissue_changes.necrotic_delta ?? '—'}%</span>
                   )}
                 </div>
               </div>
@@ -324,20 +359,22 @@ export const MonthlyVisitComparisonModal: React.FC<MonthlyVisitComparisonModalPr
               <div className="p-3 rounded-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
                 <div className="text-[10px] uppercase font-bold text-slate-500">Epithelial Margin</div>
                 <div className="text-base font-extrabold text-pink-600 dark:text-pink-400 mt-1">
-                  {comparison.current_visit.tissue_breakdown.epithelial_percent}%
+                  {comparison.current_visit.tissue_breakdown.epithelial_percent ?? '—'}%
                 </div>
                 <div className="text-[11px] font-mono mt-0.5 font-bold">
-                  {comparison.tissue_changes.epithelial_delta >= 0 ? (
-                    <span className="text-emerald-600">+{comparison.tissue_changes.epithelial_delta}%</span>
+                  {(comparison.tissue_changes.epithelial_delta ?? 0) >= 0 ? (
+                    <span className="text-emerald-600">+{comparison.tissue_changes.epithelial_delta ?? '—'}%</span>
                   ) : (
-                    <span className="text-slate-500">{comparison.tissue_changes.epithelial_delta}%</span>
+                    <span className="text-slate-500">{comparison.tissue_changes.epithelial_delta ?? '—'}%</span>
                   )}
                 </div>
               </div>
             </div>
           </div>
+          )}
 
           {/* Categorized Findings Trajectory */}
+          {comparison.comparison_reliable && (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {/* Improved */}
             <div className="p-4 rounded-2xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/60 space-y-2">
@@ -382,11 +419,12 @@ export const MonthlyVisitComparisonModal: React.FC<MonthlyVisitComparisonModalPr
               </ul>
             </div>
           </div>
+          )}
 
           {/* Dimensions Comparison Notice */}
           <div className="p-4 rounded-2xl bg-slate-100/80 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 text-xs space-y-1">
             <div className="font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
-              <span>Approximate Dimensions & Calibration Standard:</span>
+              <span>Reliable Measurement Differences:</span>
             </div>
             <p className="text-slate-600 dark:text-slate-400">
               {comparison.dimensions_comparison.note}
@@ -417,6 +455,9 @@ export const MonthlyVisitComparisonModal: React.FC<MonthlyVisitComparisonModalPr
             </div>
             <p className="text-[11px] leading-relaxed">
               {comparison.quality_comparison_warning}
+            </p>
+            <p className="text-[11px] leading-relaxed">
+              Comparison confidence: <b>{comparison.comparison_confidence}</b>
             </p>
             <p className="text-[11px] leading-relaxed font-semibold">
               {comparison.cautionary_note}

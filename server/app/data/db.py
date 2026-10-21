@@ -84,6 +84,14 @@ class SupabaseStorage:
         public_url = self._client.storage.from_(self._bucket).get_public_url(destination_name)
         return public_url
 
+    def create_signed_upload_url(self, destination_name: str) -> Dict[str, str]:
+        signed = self._client.storage.from_(self._bucket).create_signed_upload_url(destination_name)
+        return {
+            "bucket": self._bucket,
+            "path": destination_name,
+            "token": signed["token"],
+        }
+
     def download(self, destination_name: str, local_path: str) -> bool:
         """Download a file from Supabase Storage to a local path. Returns True on success."""
         try:
@@ -105,8 +113,8 @@ class SupabaseStorage:
     def exists(self, destination_name: str) -> bool:
         """Check if a file exists in Supabase Storage."""
         try:
-            files = self._client.storage.from_(self._bucket).list()
-            return any(f.get("name") == destination_name for f in files)
+            self._client.storage.from_(self._bucket).info(destination_name)
+            return True
         except Exception:
             return False
 
@@ -331,6 +339,21 @@ class DatabaseManager:
                 os.remove(file_path)
                 return True
             return False
+
+    def create_signed_upload_url(self, destination_name: str) -> Dict[str, str]:
+        """Create a short-lived direct-upload URL for persistent Supabase storage."""
+        if not _USE_SUPABASE_STORAGE or _storage is None:
+            raise RuntimeError("Persistent Supabase photo storage is not configured.")
+        return _storage.create_signed_upload_url(destination_name)
+
+    def has_stored_file(self, destination_name: str) -> bool:
+        """Check whether a persistent upload exists before finalizing its database record."""
+        if _USE_SUPABASE_STORAGE and _storage is not None:
+            return _storage.exists(destination_name)
+        return os.path.isfile(os.path.join(self.storage_dir(), destination_name))
+
+    def wound_photo_storage_ready(self) -> bool:
+        return bool(_USE_SUPABASE_STORAGE and _storage is not None)
 
     def file_exists(self, destination_name_or_url: str) -> bool:
         """Check if a stored file exists."""
@@ -2473,7 +2496,7 @@ class DatabaseManager:
 
         if not allow_duplicate_date:
             cursor.execute(
-                "SELECT * FROM wound_visits WHERE patient_id = ? AND visit_date = ? ORDER BY created_at DESC LIMIT 1",
+                "SELECT * FROM wound_visits WHERE patient_id = ? AND visit_date = ? AND status != 'ANALYZED' ORDER BY created_at DESC LIMIT 1",
                 (patient_id, visit_date.strip())
             )
             existing = cursor.fetchone()
@@ -2533,6 +2556,26 @@ class DatabaseManager:
         conn = self.get_connection()
         cursor = conn.cursor()
 
+        cursor.execute(
+            "SELECT * FROM wound_visit_photos WHERE visit_id = ? AND image_filename = ?",
+            (visit_id, image_filename)
+        )
+        existing_photo = cursor.fetchone()
+        if existing_photo:
+            photo = dict(existing_photo)
+            photo["image_url"] = f"/api/wounds/image/{photo['image_filename']}"
+            conn.close()
+            return photo
+
+        cursor.execute("SELECT status FROM wound_visits WHERE visit_id = ?", (visit_id,))
+        visit_row = cursor.fetchone()
+        if not visit_row:
+            conn.close()
+            raise ValueError("Wound visit not found.")
+        if visit_row["status"] == "ANALYZED":
+            conn.close()
+            raise ValueError("Photos cannot be added to an analyzed visit. Create a separate visit.")
+
         cursor.execute("SELECT COUNT(*) FROM wound_visit_photos WHERE visit_id = ?", (visit_id,))
         count = cursor.fetchone()[0]
         if count >= 10:
@@ -2557,7 +2600,10 @@ class DatabaseManager:
             count
         ))
 
-        cursor.execute("UPDATE wound_visits SET updated_at = CURRENT_TIMESTAMP WHERE visit_id = ?", (visit_id,))
+        cursor.execute(
+            "UPDATE wound_visits SET status = 'PENDING', analysis_result = NULL, analyzed_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE visit_id = ?",
+            (visit_id,)
+        )
         conn.commit()
 
         cursor.execute("SELECT * FROM wound_visit_photos WHERE photo_id = ?", (photo_id,))
@@ -2565,6 +2611,21 @@ class DatabaseManager:
         p["image_url"] = f"/api/wounds/image/{p['image_filename']}"
         conn.close()
         return p
+
+    def get_wound_visit_photo_by_filename(self, visit_id: str, image_filename: str) -> Optional[Dict[str, Any]]:
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM wound_visit_photos WHERE visit_id = ? AND image_filename = ?",
+            (visit_id, image_filename)
+        )
+        photo_row = cursor.fetchone()
+        conn.close()
+        if not photo_row:
+            return None
+        photo = dict(photo_row)
+        photo["image_url"] = f"/api/wounds/image/{photo['image_filename']}"
+        return photo
 
     def remove_photo_from_wound_visit(self, visit_id: str, photo_id: str) -> bool:
         """Remove an individual photo from a visit before or after analysis."""
@@ -2988,4 +3049,3 @@ class DatabaseManager:
         return {"patient_id": patient_id, "max_reports": max_reports, "status": "success"}
 
 db = DatabaseManager()
-

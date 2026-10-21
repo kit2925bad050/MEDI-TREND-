@@ -998,110 +998,149 @@ Synthesize observations across all photos into one unified evaluation matching s
             raise ValueError("Both visits must be analyzed before comparison can be generated.")
 
         visits = sorted([visit_a, visit_b], key=lambda v: (v.get("visit_date", ""), v.get("created_at", "")))
-        baseline_visit = visits[0]
-        current_visit = visits[1]
-
+        baseline_visit, current_visit = visits
         base_res = baseline_visit.get("analysis_result") or {}
         curr_res = current_visit.get("analysis_result") or {}
-
         base_chars = base_res.get("visible_characteristics") or {}
         curr_chars = curr_res.get("visible_characteristics") or {}
-
         base_tissue = base_chars.get("tissue_breakdown") or {}
         curr_tissue = curr_chars.get("tissue_breakdown") or {}
 
-        base_gran = base_tissue.get("granulation_percent", 50.0)
-        curr_gran = curr_tissue.get("granulation_percent", 50.0)
-        base_slough = base_tissue.get("slough_percent", 20.0)
-        curr_slough = curr_tissue.get("slough_percent", 20.0)
-        base_necrotic = base_tissue.get("necrotic_percent", 5.0)
-        curr_necrotic = curr_tissue.get("necrotic_percent", 5.0)
-        base_epith = base_tissue.get("epithelial_percent", 25.0)
-        curr_epith = curr_tissue.get("epithelial_percent", 25.0)
+        def numeric_percent(tissue: Dict[str, Any], key: str) -> Optional[float]:
+            value = tissue.get(key)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                return None
+            value = float(value)
+            return value if 0 <= value <= 100 else None
 
-        gran_delta = round(curr_gran - base_gran, 1)
-        slough_delta = round(curr_slough - base_slough, 1)
-        necrotic_delta = round(curr_necrotic - base_necrotic, 1)
-        epith_delta = round(curr_epith - base_epith, 1)
-
-        base_dim = base_res.get("dimensions_info") or {}
-        curr_dim = curr_res.get("dimensions_info") or {}
-        has_calibrated = (
-            base_dim.get("has_scale_marker") is True and
-            curr_dim.get("has_scale_marker") is True and
-            base_dim.get("surface_area_cm2") is not None and
-            curr_dim.get("surface_area_cm2") is not None
+        tissue_keys = (
+            "granulation_percent",
+            "slough_percent",
+            "necrotic_percent",
+            "epithelial_percent",
+        )
+        base_values = {key: numeric_percent(base_tissue, key) for key in tissue_keys}
+        curr_values = {key: numeric_percent(curr_tissue, key) for key in tissue_keys}
+        same_location = (
+            str(baseline_visit.get("wound_location", "")).strip().casefold()
+            == str(current_visit.get("wound_location", "")).strip().casefold()
+        )
+        both_ai_assisted = (
+            base_res.get("analysis_mode") == "AI_ASSISTED_VISION_SERIES"
+            and curr_res.get("analysis_mode") == "AI_ASSISTED_VISION_SERIES"
+        )
+        reliable_tissue_data = all(value is not None for value in (*base_values.values(), *curr_values.values()))
+        reliable_comparison = (
+            both_ai_assisted
+            and reliable_tissue_data
+            and same_location
+            and bool(baseline_visit.get("photos"))
+            and bool(current_visit.get("photos"))
         )
 
-        area_delta_pct = None
-        dim_note = ""
-        if has_calibrated:
-            b_area = float(base_dim["surface_area_cm2"])
-            c_area = float(curr_dim["surface_area_cm2"])
-            if b_area > 0:
+        improvement: List[str] = []
+        worsening: List[str] = []
+        unchanged: List[str] = []
+        deltas: Dict[str, Optional[float]] = {key: None for key in tissue_keys}
+        if reliable_comparison:
+            for key in tissue_keys:
+                baseline_value = base_values[key]
+                current_value = curr_values[key]
+                if baseline_value is not None and current_value is not None:
+                    deltas[key] = round(current_value - baseline_value, 1)
+            gran_delta = deltas["granulation_percent"]
+            slough_delta = deltas["slough_percent"]
+            necrotic_delta = deltas["necrotic_percent"]
+            epith_delta = deltas["epithelial_percent"]
+
+            if gran_delta is not None and gran_delta > 5:
+                improvement.append(f"AI-assisted tissue estimate: granulation increased by {gran_delta:+.1f} percentage points.")
+            elif gran_delta is not None and gran_delta < -5:
+                worsening.append(f"AI-assisted tissue estimate: granulation decreased by {gran_delta:+.1f} percentage points.")
+            if slough_delta is not None and slough_delta < -5:
+                improvement.append(f"AI-assisted tissue estimate: slough decreased by {slough_delta:.1f} percentage points.")
+            elif slough_delta is not None and slough_delta > 5:
+                worsening.append(f"AI-assisted tissue estimate: slough increased by {slough_delta:+.1f} percentage points.")
+            if necrotic_delta is not None and necrotic_delta > 3:
+                worsening.append(f"AI-assisted tissue estimate: necrotic tissue increased by {necrotic_delta:+.1f} percentage points.")
+            elif necrotic_delta is not None and necrotic_delta < -2:
+                improvement.append(f"AI-assisted tissue estimate: necrotic tissue decreased by {necrotic_delta:.1f} percentage points.")
+            if epith_delta is not None and epith_delta > 5:
+                improvement.append(f"AI-assisted tissue estimate: epithelialization increased by {epith_delta:+.1f} percentage points.")
+
+            base_dim = base_res.get("dimensions_info") or {}
+            curr_dim = curr_res.get("dimensions_info") or {}
+            has_calibrated = (
+                base_dim.get("has_scale_marker") is True
+                and curr_dim.get("has_scale_marker") is True
+                and isinstance(base_dim.get("surface_area_cm2"), (int, float))
+                and isinstance(curr_dim.get("surface_area_cm2"), (int, float))
+                and base_dim["surface_area_cm2"] > 0
+                and curr_dim["surface_area_cm2"] > 0
+            )
+            area_delta_pct = None
+            if has_calibrated:
+                b_area = float(base_dim["surface_area_cm2"])
+                c_area = float(curr_dim["surface_area_cm2"])
                 area_delta_pct = round(((c_area - b_area) / b_area) * 100, 1)
-                dim_note = f"Measured wound surface area changed from {b_area} cm² to {c_area} cm² ({area_delta_pct:+.1f}%)."
-        else:
-            dim_note = "Reliable dimension change cannot be calculated because one or both visits lack a calibrated scale marker in photos."
-
-        improved_findings = []
-        worsened_findings = []
-        unchanged_findings = []
-
-        if gran_delta > 5:
-            improved_findings.append(f"Granulation tissue expanded by {gran_delta:+.1f}% (healthy vascularized bed development)")
-        elif gran_delta < -5:
-            worsened_findings.append(f"Granulation tissue contracted by {gran_delta:+.1f}%")
-
-        if slough_delta < -5:
-            improved_findings.append(f"Non-viable yellow slough reduced by {abs(slough_delta):.1f}% (effective autolytic/clinical debridement)")
-        elif slough_delta > 5:
-            worsened_findings.append(f"Slough accumulation increased by {slough_delta:+.1f}%")
-
-        if necrotic_delta < -2:
-            improved_findings.append(f"Necrotic eschar decreased by {abs(necrotic_delta):.1f}%")
-        elif necrotic_delta > 3:
-            worsened_findings.append(f"New necrotic tissue formation observed (+{necrotic_delta:.1f}%)")
-
-        if epith_delta > 5:
-            improved_findings.append(f"Epithelialization margin advanced by +{epith_delta:.1f}%")
-
-        base_redness = base_chars.get("periwound_redness", "Stable")
-        curr_redness = curr_chars.get("periwound_redness", "Stable")
-        if base_redness != curr_redness:
-            if "mild" in curr_redness.lower() and "severe" in base_redness.lower():
-                improved_findings.append(f"Periwound erythema improved from '{base_redness}' to '{curr_redness}'")
-            elif "severe" in curr_redness.lower() or "spreading" in curr_redness.lower():
-                worsened_findings.append(f"Periwound erythema progressed to '{curr_redness}'")
+                dim_note = f"Calibrated area changed from {b_area} cm² to {c_area} cm² ({area_delta_pct:+.1f}%)."
             else:
-                unchanged_findings.append(f"Periwound redness: '{curr_redness}'")
+                dim_note = "No reliable calibrated area measurement is available for both visits."
+
+            if not improvement and not worsening:
+                unchanged.append("No material difference was identified in the available AI-assisted tissue estimates.")
+            if len(worsening) >= 2 or (area_delta_pct is not None and area_delta_pct > 20):
+                progress_status = "Worsening"
+            elif improvement and not worsening:
+                progress_status = "Improving"
+            elif improvement and worsening:
+                progress_status = "Mixed / Needs Monitoring"
+            else:
+                progress_status = "No Clear Change"
+            comparison_summary = (
+                f"Visual comparison of {baseline_visit.get('visit_date')} and {current_visit.get('visit_date')} "
+                f"for {current_visit.get('wound_location')}: {progress_status}. "
+                "AI-assisted estimates are image-dependent and require clinical verification."
+            )
+            comparison_reason = ""
+            confidence = "LIMITED"
         else:
-            unchanged_findings.append(f"Periwound erythema status: stable ({curr_redness})")
+            has_calibrated = False
+            area_delta_pct = None
+            if not same_location:
+                comparison_reason = "The wound locations differ, so these photos may not show the same wound."
+            elif not both_ai_assisted:
+                comparison_reason = "At least one visit lacks AI-assisted image interpretation; heuristic estimates are not reliable comparison data."
+            elif not reliable_tissue_data:
+                comparison_reason = "One or both reports lack complete, valid tissue measurements."
+            else:
+                comparison_reason = "One or both visits do not have linked photos for visual review."
+            dim_note = "Measurement differences are unavailable because reliable calibrated measurements were not present for both visits."
+            progress_status = "INCONCLUSIVE"
+            comparison_summary = (
+                f"Comparison is inconclusive for {baseline_visit.get('visit_date')} and {current_visit.get('visit_date')}. "
+                f"{comparison_reason} Clinical review is recommended."
+            )
+            confidence = "UNAVAILABLE"
 
-        unchanged_findings.append(f"Anatomical location remains constant at {current_visit.get('wound_location', 'Unspecified')}")
-
-        if not improved_findings and not worsened_findings:
-            unchanged_findings.append("Tissue composition metrics remained within stable boundary limits (+/- 5%)")
-
-        if len(worsened_findings) >= 2 or necrotic_delta > 5 or (area_delta_pct is not None and area_delta_pct > 20):
-            progress_status = "Worsening"
-        elif len(improved_findings) >= 1 and not worsened_findings:
-            progress_status = "Improving"
-        elif len(improved_findings) > 0 and len(worsened_findings) > 0:
-            progress_status = "Mixed / Needs Monitoring"
-        else:
-            progress_status = "No Clear Change"
-
-        comp_summary = (
-            f"Monthly comparative analysis from {baseline_visit.get('visit_month')} ({baseline_visit.get('visit_date')}) "
-            f"to {current_visit.get('visit_month')} ({current_visit.get('visit_date')}): "
-            f"Overall trajectory is evaluated as '{progress_status}'. "
-            f"Granulation tissue shifted by {gran_delta:+.1f}%, slough shifted by {slough_delta:+.1f}%, "
-            f"and necrotic eschar shifted by {necrotic_delta:+.1f}%. "
-            f"{dim_note}"
+        base_summary = base_res.get("summary_of_findings") or base_chars.get("primary_bed_appearance", "No clinical summary recorded.")
+        curr_summary = curr_res.get("summary_of_findings") or curr_chars.get("primary_bed_appearance", "No clinical summary recorded.")
+        image_quality_warnings = []
+        for visit_label, analysis_result in (("Previous visit", base_res), ("Current visit", curr_res)):
+            warnings = analysis_result.get("image_quality_warnings") or []
+            if isinstance(warnings, str):
+                warnings = [warnings]
+            if isinstance(warnings, list):
+                image_quality_warnings.extend(
+                    f"{visit_label}: {warning}" for warning in warnings if isinstance(warning, str) and warning.strip()
+                )
+        quality_warning = (
+            "Image color, lighting, focus, framing, and camera angle can change apparent wound features. "
+            "Comparison confidence is limited; it is not a diagnosis."
         )
-
-        res = {
+        if image_quality_warnings:
+            quality_warning += " Photo-specific warnings: " + " ".join(image_quality_warnings)
+        result = {
             "patient_id": p_a,
             "baseline_visit": {
                 "visit_id": baseline_visit.get("visit_id"),
@@ -1111,8 +1150,9 @@ Synthesize observations across all photos into one unified evaluation matching s
                 "wound_type_tag": baseline_visit.get("wound_type_tag"),
                 "photo_count": baseline_visit.get("photo_count", len(baseline_visit.get("photos", []))),
                 "photos": baseline_visit.get("photos", []),
-                "summary": base_res.get("summary_of_findings") or base_chars.get("primary_bed_appearance", "Baseline examination recorded."),
-                "severity_indicator": base_res.get("severity_indicator", "Moderate"),
+                "summary": base_summary,
+                "analysis_result": base_res,
+                "severity_indicator": base_res.get("severity_indicator"),
                 "tissue_breakdown": base_tissue,
             },
             "current_visit": {
@@ -1123,46 +1163,50 @@ Synthesize observations across all photos into one unified evaluation matching s
                 "wound_type_tag": current_visit.get("wound_type_tag"),
                 "photo_count": current_visit.get("photo_count", len(current_visit.get("photos", []))),
                 "photos": current_visit.get("photos", []),
-                "summary": curr_res.get("summary_of_findings") or curr_chars.get("primary_bed_appearance", "Current examination recorded."),
-                "severity_indicator": curr_res.get("severity_indicator", "Moderate"),
+                "summary": curr_summary,
+                "analysis_result": curr_res,
+                "severity_indicator": curr_res.get("severity_indicator"),
                 "tissue_breakdown": curr_tissue,
             },
+            "comparison_reliable": reliable_comparison,
+            "comparison_confidence": confidence,
+            "inconclusive_reason": comparison_reason,
             "progress_status": progress_status,
             "tissue_changes": {
-                "granulation_delta": gran_delta,
-                "slough_delta": slough_delta,
-                "necrotic_delta": necrotic_delta,
-                "epithelial_delta": epith_delta,
+                "granulation_delta": deltas["granulation_percent"],
+                "slough_delta": deltas["slough_percent"],
+                "necrotic_delta": deltas["necrotic_percent"],
+                "epithelial_delta": deltas["epithelial_percent"],
                 "baseline_breakdown": base_tissue,
                 "current_breakdown": curr_tissue,
             },
             "findings_trajectory": {
-                "improved_findings": improved_findings,
-                "worsened_findings": worsened_findings,
-                "unchanged_findings": unchanged_findings,
+                "improved_findings": improvement,
+                "worsened_findings": worsening,
+                "unchanged_findings": unchanged,
             },
             "dimensions_comparison": {
                 "has_calibrated_measurements": has_calibrated,
                 "area_change_percent": area_delta_pct,
                 "note": dim_note,
             },
-            "comparison_summary": comp_summary,
-            "quality_comparison_warning": "Camera angles, focal distance, and white balance may vary between visits. Photographic comparisons must be correlated with clinical palpation and physician review.",
-            "cautionary_note": "Photographic comparative assessment is clinical decision-support only. Definitive healing evaluation requires direct clinical examination.",
+            "comparison_summary": comparison_summary,
+            "quality_comparison_warning": quality_warning,
+            "cautionary_note": "If the photographs do not support a reliable conclusion, obtain direct clinical review. Do not use image comparison alone to guide treatment.",
             "tamil_translation": {
                 "progress_status": self.translate_text_to_tamil(progress_status),
-                "comparison_summary": self.translate_text_to_tamil(comp_summary),
-                "improved_findings": [self.translate_text_to_tamil(f) for f in improved_findings],
-                "worsened_findings": [self.translate_text_to_tamil(f) for f in worsened_findings],
-                "unchanged_findings": [self.translate_text_to_tamil(f) for f in unchanged_findings],
+                "comparison_summary": self.translate_text_to_tamil(comparison_summary),
+                "improved_findings": [self.translate_text_to_tamil(f) for f in improvement],
+                "worsened_findings": [self.translate_text_to_tamil(f) for f in worsening],
+                "unchanged_findings": [self.translate_text_to_tamil(f) for f in unchanged],
             }
         }
-        res["visit_a"] = res["baseline_visit"]
-        res["visit_b"] = res["current_visit"]
-        res["trajectory"] = res["progress_status"]
-        res["tissue_deltas"] = res["tissue_changes"]
-        res["comparison_tamil"] = res["tamil_translation"]
-        return res
+        result["visit_a"] = result["baseline_visit"]
+        result["visit_b"] = result["current_visit"]
+        result["trajectory"] = result["progress_status"]
+        result["tissue_deltas"] = result["tissue_changes"]
+        result["comparison_tamil"] = result["tamil_translation"]
+        return result
 
     def translate_text_to_tamil(self, text: str) -> str:
         """Translates wound assessment medical text into Tamil while preserving numbers and dates."""

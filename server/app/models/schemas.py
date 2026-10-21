@@ -139,6 +139,12 @@ class WoundVisitCreateRequest(BaseModel):
     doctor_notes: Optional[str] = ""
     allow_duplicate_date: Optional[bool] = False
 
+class WoundVisitPhotoUploadRequest(BaseModel):
+    filename: str
+    mime_type: str
+    size_bytes: int
+    sha256: str
+
 class WoundVisitCompareRequest(BaseModel):
     visit_id_1: Optional[str] = None
     visit_id_2: Optional[str] = None

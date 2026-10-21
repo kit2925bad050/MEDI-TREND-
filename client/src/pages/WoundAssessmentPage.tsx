@@ -600,7 +600,7 @@ export const WoundAssessmentPage: React.FC<WoundAssessmentPageProps> = ({
                     {visits.map((visit) => {
                       const isSelected = visit.visit_id === selectedVisitId;
                       const isAnalyzed = visit.status === 'ANALYZED';
-                      const isPending = visit.status === 'PENDING';
+                      const isPending = visit.status === 'PENDING' || visit.status === 'FAILED';
                       const isCheckedForCompare = selectedVisitIdsForCompare.includes(visit.visit_id);
 
                       return (
@@ -669,21 +669,22 @@ export const WoundAssessmentPage: React.FC<WoundAssessmentPageProps> = ({
                                   className="relative w-12 h-12 rounded-xl overflow-hidden bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex-shrink-0 group"
                                 >
                                   <img
-                                    src={p.image_url}
+                                    src={getWoundImageUrl(p.image_filename)}
                                     alt={`Photo ${pIdx + 1}`}
                                     className="w-full h-full object-cover"
                                   />
-                                  {/* Delete photo button (always available, particularly before analysis) */}
-                                  <button
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      handleDeleteVisitPhoto(visit.visit_id, p.photo_id);
-                                    }}
-                                    className="absolute top-0.5 right-0.5 p-0.5 rounded bg-black/70 text-white opacity-0 group-hover:opacity-100 transition hover:bg-rose-600"
-                                    title="Remove this photo"
-                                  >
-                                    <Trash2 className="w-3 h-3" />
-                                  </button>
+                                  {visit.status !== 'ANALYZED' && (
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleDeleteVisitPhoto(visit.visit_id, p.photo_id);
+                                      }}
+                                      className="absolute top-0.5 right-0.5 p-0.5 rounded bg-black/70 text-white opacity-0 group-hover:opacity-100 transition hover:bg-rose-600"
+                                      title="Remove this photo"
+                                    >
+                                      <Trash2 className="w-3 h-3" />
+                                    </button>
+                                  )}
                                 </div>
                               ))}
                             </div>
@@ -717,7 +718,7 @@ export const WoundAssessmentPage: React.FC<WoundAssessmentPageProps> = ({
                               )}
 
                               {/* Add More Photos */}
-                              {visit.photo_count < 10 && (
+                              {visit.photo_count < 10 && visit.status !== 'ANALYZED' && (
                                 <button
                                   onClick={(e) => {
                                     e.stopPropagation();
@@ -780,7 +781,7 @@ export const WoundAssessmentPage: React.FC<WoundAssessmentPageProps> = ({
                         </p>
                       </div>
 
-                      {selectedVisit.status === 'PENDING' && (
+                      {(selectedVisit.status === 'PENDING' || selectedVisit.status === 'FAILED') && (
                         <button
                           onClick={() => handleAnalyzeVisit(selectedVisit.visit_id)}
                           disabled={isAnalyzingVisitId === selectedVisit.visit_id || selectedVisit.photo_count < 1}
@@ -806,7 +807,7 @@ export const WoundAssessmentPage: React.FC<WoundAssessmentPageProps> = ({
                       <div className="space-y-3">
                         <div className="relative rounded-2xl overflow-hidden aspect-video bg-slate-950 flex items-center justify-center border border-slate-200 dark:border-slate-800">
                           <img
-                            src={selectedVisit.photos[activePhotoIdx]?.image_url}
+                            src={getWoundImageUrl(selectedVisit.photos[activePhotoIdx]?.image_filename || '')}
                             alt={`Photo ${activePhotoIdx + 1}`}
                             className="w-full h-full object-contain"
                           />
@@ -851,7 +852,7 @@ export const WoundAssessmentPage: React.FC<WoundAssessmentPageProps> = ({
                                   : 'border-transparent opacity-70 hover:opacity-100'
                               }`}
                             >
-                              <img src={p.image_url} alt="" className="w-full h-full object-cover" />
+                              <img src={getWoundImageUrl(p.image_filename)} alt="" className="w-full h-full object-cover" />
                             </button>
                           ))}
                         </div>
@@ -863,7 +864,7 @@ export const WoundAssessmentPage: React.FC<WoundAssessmentPageProps> = ({
                     )}
 
                     {/* Pending State Banner */}
-                    {selectedVisit.status === 'PENDING' && (
+                    {(selectedVisit.status === 'PENDING' || selectedVisit.status === 'FAILED') && (
                       <div className="p-4 rounded-2xl bg-amber-50/80 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/60 text-xs text-amber-900 dark:text-amber-200 space-y-2">
                         <div className="font-bold flex items-center gap-1.5 text-amber-800 dark:text-amber-300">
                           <Info className="w-4 h-4" />
@@ -872,6 +873,11 @@ export const WoundAssessmentPage: React.FC<WoundAssessmentPageProps> = ({
                         <p className="leading-relaxed">
                           This visit currently holds {selectedVisit.photo_count} photos. As requested, uploading photos does not automatically run analysis. Review your photos above, add more if necessary, and click <b>"Analyze Photos Now"</b> to trigger multi-photo evaluation.
                         </p>
+                        {selectedVisit.status === 'FAILED' && selectedVisit.analysis_result?.error && (
+                          <p className="font-semibold text-rose-700 dark:text-rose-300">
+                            Previous analysis failed: {selectedVisit.analysis_result.error}
+                          </p>
+                        )}
                       </div>
                     )}
 

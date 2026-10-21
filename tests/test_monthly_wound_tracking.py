@@ -3,6 +3,8 @@ import io
 import sys
 import uuid
 import unittest
+import hashlib
+from unittest.mock import patch
 from PIL import Image
 from fastapi.testclient import TestClient
 
@@ -210,6 +212,17 @@ class TestMonthlyWoundTracking(unittest.TestCase):
         assert "analysis_tamil" in analysis
         assert analysis.get("photos_analyzed_count") == 4
 
+        repeated_analysis = self.client.post(
+            f"/api/wounds/{self.patient_a_id}/visits/{visit_id}/analyze",
+            headers=self.headers,
+        )
+        assert repeated_analysis.status_code == 409
+        preserved_visit = self.client.get(
+            f"/api/wounds/{self.patient_a_id}/visits/{visit_id}",
+            headers=self.headers,
+        )
+        assert preserved_visit.json()["analysis_result"] == analysis
+
     def test_07_monthly_visit_management_second_visit_preserved(self):
         """7. Create a subsequent month visit (Nov 2026) and verify historical visits are preserved."""
         # Create November visit
@@ -286,6 +299,19 @@ class TestMonthlyWoundTracking(unittest.TestCase):
         assert "comparison_tamil" in comp
         assert len(comp["visit_a"]["photos"]) == 4
         assert len(comp["visit_b"]["photos"]) == 3
+        assert comp["visit_a"]["analysis_result"] is not None
+        assert comp["visit_b"]["analysis_result"] is not None
+        assert "comparison_reliable" in comp
+        if not comp["comparison_reliable"]:
+            assert comp["trajectory"] == "INCONCLUSIVE"
+            assert comp["tissue_deltas"]["granulation_delta"] is None
+
+        same_visit = self.client.post(
+            f"/api/wounds/{self.patient_a_id}/visits/compare",
+            headers=self.headers,
+            json={"visit_id_a": self.visit_oct_id, "visit_id_b": self.visit_oct_id},
+        )
+        assert same_visit.status_code == 400
 
     def test_09_reject_cross_patient_comparison(self):
         """9. Reject comparison between visits belonging to different patients."""
@@ -354,6 +380,188 @@ class TestMonthlyWoundTracking(unittest.TestCase):
         # Check existing wound assessments legacy endpoint
         res_legacy = self.client.get(f"/api/wounds/{self.patient_a_id}/assessments", headers=self.headers)
         assert res_legacy.status_code == 200
+
+    def test_12_upload_retry_is_idempotent_and_ten_photo_limit(self):
+        """Repeated multipart requests must not duplicate a photo; up to 10 photos remain pending."""
+        created = self.client.post(
+            f"/api/wounds/{self.patient_b_id}/visits",
+            headers=self.headers,
+            json={
+                "visit_date": "2026-12-15",
+                "wound_location": "Right Heel",
+                "wound_type_tag": "Diabetic Foot Ulcer (DFU)",
+            },
+        )
+        assert created.status_code == 200, created.text
+        visit_id = created.json()["visit_id"]
+
+        first_two = [
+            ("files", ("one.jpg", create_test_image_bytes(format="JPEG"), "image/jpeg")),
+            ("files", ("two.png", create_test_image_bytes(format="PNG"), "image/png")),
+        ]
+        upload_url = f"/api/wounds/{self.patient_b_id}/visits/{visit_id}/photos"
+        first_upload = self.client.post(upload_url, headers=self.headers, files=first_two)
+        assert first_upload.status_code == 200, first_upload.text
+        assert len(first_upload.json()["photos"]) == 2
+
+        retry_upload = self.client.post(upload_url, headers=self.headers, files=first_two)
+        assert retry_upload.status_code == 200, retry_upload.text
+        assert len(retry_upload.json()["photos"]) == 2
+        assert retry_upload.json()["status"] == "PENDING"
+
+        remaining = [
+            ("files", (f"extra_{i}.webp", create_test_image_bytes(color=(i * 10, 80, 90), format="WEBP"), "image/webp"))
+            for i in range(8)
+        ]
+        final_upload = self.client.post(upload_url, headers=self.headers, files=remaining)
+        assert final_upload.status_code == 200, final_upload.text
+        assert len(final_upload.json()["photos"]) == 10
+        assert final_upload.json()["status"] == "PENDING"
+        assert final_upload.json()["analysis_result"] is None
+
+    def test_13_analyzed_same_date_creates_a_new_visit(self):
+        """A new visit on an analyzed visit's date must never reuse or overwrite its report."""
+        created = self.client.post(
+            f"/api/wounds/{self.patient_a_id}/visits",
+            headers=self.headers,
+            json={
+                "visit_date": "2026-10-15",
+                "wound_location": "Left Lower Extremity - Medial Malleolus",
+            },
+        )
+        assert created.status_code == 200, created.text
+        new_visit = created.json()
+        assert new_visit["visit_id"] != self.visit_oct_id
+        assert new_visit["status"] == "PENDING"
+        old_visit = self.client.get(
+            f"/api/wounds/{self.patient_a_id}/visits/{self.visit_oct_id}",
+            headers=self.headers,
+        )
+        assert old_visit.status_code == 200
+        assert old_visit.json()["status"] == "ANALYZED"
+        assert len(old_visit.json()["photos"]) == 4
+
+    def test_14_three_month_visit_history_is_retained(self):
+        """October, November, and December visits remain independently available."""
+        december = self.client.post(
+            f"/api/wounds/{self.patient_a_id}/visits",
+            headers=self.headers,
+            json={
+                "visit_date": "2026-12-21",
+                "wound_location": "Left Lower Extremity - Medial Malleolus",
+            },
+        )
+        assert december.status_code == 200, december.text
+        visit_id = december.json()["visit_id"]
+        upload = self.client.post(
+            f"/api/wounds/{self.patient_a_id}/visits/{visit_id}/photos",
+            headers=self.headers,
+            files=[
+                ("files", ("december.webp", create_test_image_bytes(format="WEBP"), "image/webp")),
+            ],
+        )
+        assert upload.status_code == 200, upload.text
+
+        visits = self.client.get(
+            f"/api/wounds/{self.patient_a_id}/visits",
+            headers=self.headers,
+        )
+        assert visits.status_code == 200
+        data = visits.json()
+        assert any(v["visit_id"] == self.visit_oct_id and v["photo_count"] == 4 for v in data)
+        assert any(v["visit_id"] == self.visit_nov_id and v["photo_count"] == 3 for v in data)
+        assert any(v["visit_id"] == visit_id and v["photo_count"] == 1 for v in data)
+
+    def test_15_signed_storage_ticket_and_finalize_are_authenticated_and_idempotent(self):
+        """The production direct-upload flow only records verified image bytes once."""
+        created = self.client.post(
+            f"/api/wounds/{self.patient_b_id}/visits",
+            headers=self.headers,
+            json={"visit_date": "2027-01-11", "wound_location": "Right Heel"},
+        )
+        assert created.status_code == 200, created.text
+        visit_id = created.json()["visit_id"]
+        image_bytes = create_test_image_bytes(format="JPEG")
+        metadata = {
+            "filename": "signed-photo.jpg",
+            "mime_type": "image/jpeg",
+            "size_bytes": len(image_bytes),
+            "sha256": hashlib.sha256(image_bytes).hexdigest(),
+        }
+        base_url = f"/api/wounds/{self.patient_b_id}/visits/{visit_id}/photos"
+
+        unauthorized_ticket = self.client.post(
+            f"{base_url}/upload-url",
+            json=metadata,
+        )
+        assert unauthorized_ticket.status_code == 401
+
+        with patch.object(db, "wound_photo_storage_ready", return_value=True), \
+             patch.object(db, "has_stored_file", return_value=False), \
+             patch.object(db, "create_signed_upload_url", return_value={
+                 "bucket": "wound-photos",
+                 "path": "signed-object.jpg",
+                 "token": "short-lived-test-token",
+             }):
+            ticket = self.client.post(
+                f"{base_url}/upload-url",
+                headers=self.headers,
+                json=metadata,
+            )
+        assert ticket.status_code == 200, ticket.text
+        assert ticket.json()["mode"] == "signed"
+        assert ticket.json()["bucket"] == "wound-photos"
+        assert ticket.json()["token"] == "short-lived-test-token"
+
+        def write_uploaded_image(_filename, path):
+            with open(path, "wb") as image_file:
+                image_file.write(image_bytes)
+            return True
+
+        try:
+            with patch.object(db, "wound_photo_storage_ready", return_value=True), \
+                 patch.object(db, "retrieve_uploaded_file", side_effect=write_uploaded_image):
+                completed = self.client.post(
+                    f"{base_url}/complete",
+                    headers=self.headers,
+                    json=metadata,
+                )
+                retry = self.client.post(
+                    f"{base_url}/complete",
+                    headers=self.headers,
+                    json=metadata,
+                )
+            assert completed.status_code == 200, completed.text
+            assert completed.json()["status"] == "PENDING"
+            assert len(completed.json()["photos"]) == 1
+            assert retry.status_code == 200, retry.text
+            assert len(retry.json()["photos"]) == 1
+
+            invalid_metadata = {
+                "filename": "invalid.jpg",
+                "mime_type": "image/jpeg",
+                "size_bytes": len(b"not-an-image"),
+                "sha256": hashlib.sha256(b"not-an-image").hexdigest(),
+            }
+
+            def write_invalid_image(_filename, path):
+                with open(path, "wb") as image_file:
+                    image_file.write(b"not-an-image")
+                return True
+
+            with patch.object(db, "wound_photo_storage_ready", return_value=True), \
+                 patch.object(db, "retrieve_uploaded_file", side_effect=write_invalid_image), \
+                 patch.object(db, "delete_uploaded_file", return_value=True):
+                invalid = self.client.post(
+                    f"{base_url}/complete",
+                    headers=self.headers,
+                    json=invalid_metadata,
+                )
+            assert invalid.status_code == 400
+            assert "not a valid JPG" in invalid.json()["detail"]
+            assert len(self.client.get(base_url.rsplit("/photos", 1)[0], headers=self.headers).json()["photos"]) == 1
+        finally:
+            db.delete_wound_visit(visit_id)
 
 
 if __name__ == "__main__":

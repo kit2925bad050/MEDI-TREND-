@@ -3,11 +3,9 @@ import {
   ReportRecord,
   AIAnalysisResult,
   AuditLogEntry,
-  UserRole,
   WoundAssessmentRecord,
   WoundComparisonResult,
   WoundVisitRecord,
-  WoundVisitPhoto,
   WoundVisitComparisonResult,
 } from '../types';
 import { supabase } from './supabase';
@@ -66,10 +64,16 @@ async function readApiResponse<T>(res: Response, defaultMessage: string): Promis
   const data = await safeJson(res);
   if (!res.ok) {
     const detail = data?.detail;
-    const message =
-      typeof detail === 'string'
-        ? detail
-        : detail?.message || data?.message || defaultMessage;
+    let message = defaultMessage;
+    if (typeof detail === 'string') {
+      message = detail;
+    } else if (Array.isArray(detail)) {
+      message = detail.map((d: any) => d.msg || d.message || JSON.stringify(d)).join('; ');
+    } else if (detail?.message) {
+      message = detail.message;
+    } else if (data?.message) {
+      message = data.message;
+    }
     throw new Error(message);
   }
   if (data === null) {
@@ -1978,26 +1982,144 @@ export async function createWoundVisit(
   }
 }
 
+export class WoundVisitPhotoUploadError extends Error {
+  constructor(
+    message: string,
+    public readonly savedVisit: WoundVisitRecord,
+    public readonly uploadedFiles: File[]
+  ) {
+    super(message);
+    this.name = 'WoundVisitPhotoUploadError';
+  }
+}
+
 export async function uploadWoundVisitPhotos(
   patientId: string,
   visitId: string,
   files: File[]
 ): Promise<WoundVisitRecord> {
+  let latestVisit: WoundVisitRecord | undefined;
+  const uploadedFiles: File[] = [];
   try {
-    const formData = new FormData();
-    files.forEach((f) => formData.append('files', f));
+    if (files.length === 0) {
+      throw new Error('Select at least one photo to upload.');
+    }
 
-    const res = await fetch(
-      `${API_BASE}/wounds/${encodeURIComponent(patientId)}/visits/${encodeURIComponent(visitId)}/photos`,
-      {
-        method: 'POST',
-        headers: getAuthHeaders(),
-        body: formData,
-      }
+    const fileMetadata = await Promise.all(
+      files.map(async (file) => {
+        const extension = file.name.split('.').pop()?.toLowerCase() || '';
+        const mimeTypeByExtension: Record<string, string> = {
+          jpg: 'image/jpeg',
+          jpeg: 'image/jpeg',
+          png: 'image/png',
+          webp: 'image/webp',
+        };
+        const mime_type = mimeTypeByExtension[extension];
+        if (!mime_type || (file.type && file.type !== mime_type)) {
+          throw new Error(`Unsupported photo format for "${file.name}". Use JPG, PNG, or WEBP.`);
+        }
+        const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
+        const sha256 = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+        return {
+          filename: file.name,
+          mime_type,
+          size_bytes: file.size,
+          sha256,
+        };
+      })
     );
-    return await readApiResponse<WoundVisitRecord>(res, 'Failed to upload visit photos.');
+
+    const requestTicket = async (metadata: (typeof fileMetadata)[number]) => {
+      const res = await fetch(
+        `${API_BASE}/wounds/${encodeURIComponent(patientId)}/visits/${encodeURIComponent(visitId)}/photos/upload-url`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...getAuthHeaders(),
+          },
+          body: JSON.stringify(metadata),
+        }
+      );
+      return readApiResponse<{
+        mode: 'signed' | 'proxy';
+        already_uploaded: boolean;
+        already_stored?: boolean;
+        visit?: WoundVisitRecord;
+        bucket?: string;
+        path?: string;
+        token?: string;
+      }>(res, 'Could not prepare secure photo upload.');
+    };
+
+    const firstTicket = await requestTicket(fileMetadata[0]);
+    if (firstTicket.mode === 'proxy') {
+      const formData = new FormData();
+      files.forEach((file) => formData.append('files', file));
+      const authHeaders = getAuthHeaders();
+      delete authHeaders['Content-Type'];
+      const res = await fetch(
+        `${API_BASE}/wounds/${encodeURIComponent(patientId)}/visits/${encodeURIComponent(visitId)}/photos`,
+        { method: 'POST', headers: authHeaders, body: formData }
+      );
+      return await readApiResponse<WoundVisitRecord>(res, 'Failed to upload visit photos.');
+    }
+
+    let updatedVisit: WoundVisitRecord | undefined;
+    for (const [index, file] of files.entries()) {
+      const ticket = index === 0 ? firstTicket : await requestTicket(fileMetadata[index]);
+      if (ticket.mode !== 'signed') {
+        throw new Error('The server changed photo storage mode during upload. Retry the remaining photos.');
+      }
+      if (ticket.already_uploaded && ticket.visit) {
+        updatedVisit = ticket.visit;
+        latestVisit = ticket.visit;
+        uploadedFiles.push(file);
+        continue;
+      }
+
+      if (!ticket.already_stored) {
+        if (!ticket.bucket || !ticket.path || !ticket.token) {
+          throw new Error('The server returned an incomplete secure upload ticket.');
+        }
+        const { error } = await supabase.storage
+          .from(ticket.bucket)
+          .uploadToSignedUrl(ticket.path, ticket.token, file, {
+            contentType: fileMetadata[index].mime_type,
+            upsert: false,
+          });
+        if (error) {
+          throw new Error(`Secure photo storage rejected "${file.name}": ${error.message}`);
+        }
+      }
+
+      const completeRes = await fetch(
+        `${API_BASE}/wounds/${encodeURIComponent(patientId)}/visits/${encodeURIComponent(visitId)}/photos/complete`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...getAuthHeaders(),
+          },
+          body: JSON.stringify(fileMetadata[index]),
+        }
+      );
+      updatedVisit = await readApiResponse<WoundVisitRecord>(
+        completeRes,
+        `Photo "${file.name}" reached storage but could not be attached to the visit.`
+      );
+      latestVisit = updatedVisit;
+      uploadedFiles.push(file);
+    }
+
+    if (updatedVisit) return updatedVisit;
+    return await fetchSingleWoundVisit(patientId, visitId);
   } catch (err) {
-    throw apiConnectionError(err);
+    const requestError = apiConnectionError(err);
+    if (latestVisit && uploadedFiles.length > 0) {
+      throw new WoundVisitPhotoUploadError(requestError.message, latestVisit, uploadedFiles);
+    }
+    throw requestError;
   }
 }
 

@@ -4,6 +4,7 @@ import tempfile
 import sqlite3
 import time
 import logging
+import hashlib
 
 logger = logging.getLogger("medi_trend.auth")
 
@@ -31,7 +32,7 @@ from .services.wound_analyzer import wound_engine, validate_wound_image_file
 from .models.schemas import (
     PatientProfile, ReportRecord, ParameterData, ComparisonRequest,
     AIAnalysisResult, AuditLogEntry, WoundNotesUpdateRequest, WoundComparisonRequest,
-    WoundVisitCreateRequest, WoundVisitCompareRequest
+    WoundVisitCreateRequest, WoundVisitCompareRequest, WoundVisitPhotoUploadRequest
 )
 
 app = FastAPI(
@@ -1895,18 +1896,31 @@ def create_monthly_wound_visit(
 async def upload_photos_to_wound_visit(
     patient_id: str,
     visit_id: str,
-    request: Request,
-    files: List[UploadFile] = File(...)
+    request: Request
 ):
     """
     Upload 1 to 10 wound photos for a specific monthly visit.
     Keeps photos and visit in PENDING status until explicitly analyzed.
     Does NOT automatically trigger analysis.
+    Supports single photo or multi-photo uploads with JPG, PNG, and WEBP formats up to 20MB.
     """
     user_info = require_active_user(request)
     user_id = user_info.get("user_id") or user_info.get("id") or "CLINICIAN"
     user_role = user_info.get("role") or "DOCTOR"
     user_name = user_info.get("user_name") or user_info.get("name") or "Clinician"
+
+    try:
+        form = await request.form()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid form-data payload in photo upload.") from exc
+
+    all_files = [v for k, v in form.multi_items() if hasattr(v, "filename") and v.filename]
+
+    if not all_files:
+        raise HTTPException(
+            status_code=400,
+            detail="No photos provided. Please select 1 to 10 photos to upload."
+        )
 
     patient = db.get_patient(patient_id)
     if not patient:
@@ -1918,16 +1932,28 @@ async def upload_photos_to_wound_visit(
 
     if visit.get("patient_id") != patient["patient_id"]:
         raise HTTPException(status_code=400, detail="Wound visit patient mismatch.")
+    if visit.get("status") == "ANALYZED":
+        raise HTTPException(status_code=409, detail="This visit has already been analyzed. Create a separate visit to preserve its history.")
 
     current_count = len(visit.get("photos", []))
-    if current_count + len(files) > 10:
+    if current_count + len(all_files) > 10:
         raise HTTPException(
             status_code=400,
-            detail=f"Cannot upload {len(files)} photos. Current count is {current_count}. Maximum is 10 photos per visit."
+            detail=f"Cannot upload {len(all_files)} photos. Current visit already has {current_count} photos. Maximum limit is 10 photos per visit."
         )
 
-    uploaded_records = []
-    for f in files:
+    prepared_files = []
+
+    def cleanup_prepared_files():
+        for prepared in prepared_files:
+            temp_path = prepared["temp_path"]
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    logger.warning("Could not remove temporary wound photo %s", temp_path)
+
+    for f in all_files:
         upload_name = f.filename or "wound_photo.jpg"
         ext = os.path.splitext(upload_name)[1].lower()
         if ext not in [".jpg", ".jpeg", ".png", ".webp"]:
@@ -1936,44 +1962,79 @@ async def upload_photos_to_wound_visit(
                 detail=f"Invalid file format '{ext}' in '{upload_name}'. Only JPG, PNG, and WEBP are supported."
             )
 
-        temp_filename = f"wound_multi_temp_{uuid.uuid4().hex}{ext}"
-        temp_path = os.path.join(tempfile.gettempdir(), temp_filename)
-
         try:
+            content = await f.read()
+            if not content:
+                raise HTTPException(status_code=400, detail=f"File '{upload_name}' is empty.")
+            if len(content) > 20 * 1024 * 1024:
+                raise HTTPException(status_code=413, detail=f"File '{upload_name}' exceeds 20MB limit.")
+            temp_filename = f"wound_multi_temp_{uuid.uuid4().hex}{ext}"
+            temp_path = os.path.join(tempfile.gettempdir(), temp_filename)
             with open(temp_path, "wb") as buffer:
-                content = await f.read()
-                if len(content) > 20 * 1024 * 1024:
-                    raise HTTPException(status_code=413, detail=f"File '{upload_name}' exceeds 20MB limit.")
                 buffer.write(content)
         except HTTPException:
+            cleanup_prepared_files()
             raise
         except Exception as exc:
+            cleanup_prepared_files()
             raise HTTPException(status_code=500, detail=f"Failed to process '{upload_name}'.") from exc
 
         val_res = validate_wound_image_file(temp_path, upload_name)
         if not val_res.get("is_valid"):
             if os.path.exists(temp_path):
                 os.remove(temp_path)
+            cleanup_prepared_files()
             raise HTTPException(status_code=400, detail=val_res.get("reason", f"Invalid wound image '{upload_name}'."))
 
-        dest_filename = f"WOUND_{patient['patient_id']}_{uuid.uuid4().hex[:10]}{val_res['extension']}"
-        stored_path = db.store_uploaded_file(temp_path, dest_filename, content_type=val_res["mime_type"])
+        prepared_files.append({
+            "upload_name": upload_name,
+            "temp_path": temp_path,
+            "extension": val_res["extension"],
+            "mime_type": val_res["mime_type"],
+            "size_bytes": val_res["size_bytes"],
+            "sha256": hashlib.sha256(content).hexdigest(),
+        })
 
-        if os.path.exists(temp_path):
-            try:
-                os.remove(temp_path)
-            except Exception:
-                pass
-
-        p_rec = db.add_photo_to_wound_visit(
-            visit_id=visit_id,
-            patient_id=patient["patient_id"],
-            image_path=dest_filename,
-            image_filename=dest_filename,
-            image_mime_type=val_res["mime_type"],
-            image_size_bytes=val_res["size_bytes"]
+    uploaded_records = []
+    for prepared in prepared_files:
+        safe_patient_id = re.sub(r"[^A-Za-z0-9_-]", "_", patient["patient_id"])
+        safe_visit_id = re.sub(r"[^A-Za-z0-9_-]", "_", visit_id)
+        dest_filename = (
+            f"WOUND_{safe_patient_id}_{safe_visit_id}_"
+            f"{prepared['sha256'][:32]}{prepared['extension']}"
         )
-        uploaded_records.append(p_rec)
+        existing_photo = db.get_wound_visit_photo_by_filename(visit_id, dest_filename)
+        if existing_photo:
+            if os.path.exists(prepared["temp_path"]):
+                os.remove(prepared["temp_path"])
+            uploaded_records.append(existing_photo)
+            continue
+
+        try:
+            db.store_uploaded_file(prepared["temp_path"], dest_filename, content_type=prepared["mime_type"])
+            p_rec = db.add_photo_to_wound_visit(
+                visit_id=visit_id,
+                patient_id=patient["patient_id"],
+                image_path=dest_filename,
+                image_filename=dest_filename,
+                image_mime_type=prepared["mime_type"],
+                image_size_bytes=prepared["size_bytes"]
+            )
+            uploaded_records.append(p_rec)
+        except Exception as exc:
+            logger.exception("Monthly wound photo persistence failed for visit %s", visit_id)
+            try:
+                db.delete_uploaded_file(dest_filename)
+            except Exception:
+                logger.exception("Could not clean up unrecorded wound photo %s", dest_filename)
+            cleanup_prepared_files()
+            raise HTTPException(status_code=500, detail=f"Failed to save '{prepared['upload_name']}': {exc}") from exc
+        finally:
+            if os.path.exists(prepared["temp_path"]):
+                try:
+                    os.remove(prepared["temp_path"])
+                except OSError:
+                    logger.warning("Could not remove temporary wound photo %s", prepared["temp_path"])
 
     db.log_activity(
         user_id, user_name, user_role,
@@ -1985,6 +2046,186 @@ async def upload_photos_to_wound_visit(
     return updated_visit
 
 
+@app.post("/api/wounds/{patient_id}/visits/{visit_id}/photos/upload-url")
+def create_wound_visit_photo_upload_url(
+    patient_id: str,
+    visit_id: str,
+    req: WoundVisitPhotoUploadRequest,
+    request: Request
+):
+    """Issue a signed direct-to-storage ticket, bypassing serverless body-size limits."""
+    require_active_user(request)
+    patient = db.get_patient(patient_id)
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient profile not found.")
+    visit = db.get_wound_visit(visit_id)
+    if not visit:
+        raise HTTPException(status_code=404, detail="Wound visit record not found.")
+    if visit.get("patient_id") != patient["patient_id"]:
+        raise HTTPException(status_code=400, detail="Wound visit patient mismatch.")
+    if visit.get("status") == "ANALYZED":
+        raise HTTPException(status_code=409, detail="This visit has already been analyzed. Create a separate visit to preserve its history.")
+    if req.size_bytes < 1 or req.size_bytes > 20 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Each wound photo must be between 1 byte and 20 MB.")
+    if not re.fullmatch(r"[0-9a-fA-F]{64}", req.sha256):
+        raise HTTPException(status_code=400, detail="Invalid photo checksum.")
+
+    filename = os.path.basename(req.filename or "")
+    extension = os.path.splitext(filename)[1].lower()
+    supported_types = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".webp": "image/webp",
+    }
+    if extension not in supported_types or req.mime_type.lower() != supported_types[extension]:
+        raise HTTPException(status_code=400, detail="Only matching JPG, PNG, and WEBP photo files are supported.")
+
+    safe_patient_id = re.sub(r"[^A-Za-z0-9_-]", "_", patient["patient_id"])
+    safe_visit_id = re.sub(r"[^A-Za-z0-9_-]", "_", visit_id)
+    stored_filename = f"WOUND_{safe_patient_id}_{safe_visit_id}_{req.sha256.lower()[:32]}{extension}"
+    existing_photo = db.get_wound_visit_photo_by_filename(visit_id, stored_filename)
+    if existing_photo:
+        return {"mode": "signed", "already_uploaded": True, "visit": db.get_wound_visit(visit_id)}
+
+    if not db.wound_photo_storage_ready():
+        if os.environ.get("VERCEL") == "1":
+            raise HTTPException(
+                status_code=503,
+                detail="Persistent wound-photo storage is not configured on the server. Configure Supabase Storage and retry."
+            )
+        return {"mode": "proxy", "already_uploaded": False}
+
+    if db.has_stored_file(stored_filename):
+        return {"mode": "signed", "already_uploaded": False, "already_stored": True}
+
+    if len(visit.get("photos", [])) >= 10:
+        raise HTTPException(status_code=400, detail="Maximum limit of 10 photos reached for this visit.")
+    try:
+        signed = db.create_signed_upload_url(stored_filename)
+    except Exception as exc:
+        logger.exception("Could not create signed wound-photo upload URL")
+        raise HTTPException(status_code=502, detail=f"Could not prepare secure photo storage: {exc}") from exc
+
+    return {
+        "mode": "signed",
+        "already_uploaded": False,
+        "already_stored": False,
+        "bucket": signed["bucket"],
+        "path": signed["path"],
+        "token": signed["token"],
+        "filename": stored_filename,
+    }
+
+
+@app.post("/api/wounds/{patient_id}/visits/{visit_id}/photos/complete")
+def complete_wound_visit_photo_upload(
+    patient_id: str,
+    visit_id: str,
+    req: WoundVisitPhotoUploadRequest,
+    request: Request
+):
+    """Verify a signed upload reached persistent storage, then attach it to the visit."""
+    user_info = require_active_user(request)
+    patient = db.get_patient(patient_id)
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient profile not found.")
+    visit = db.get_wound_visit(visit_id)
+    if not visit:
+        raise HTTPException(status_code=404, detail="Wound visit record not found.")
+    if visit.get("patient_id") != patient["patient_id"]:
+        raise HTTPException(status_code=400, detail="Wound visit patient mismatch.")
+    if visit.get("status") == "ANALYZED":
+        raise HTTPException(status_code=409, detail="This visit has already been analyzed. Create a separate visit to preserve its history.")
+    if req.size_bytes < 1 or req.size_bytes > 20 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Each wound photo must be between 1 byte and 20 MB.")
+    if not re.fullmatch(r"[0-9a-fA-F]{64}", req.sha256):
+        raise HTTPException(status_code=400, detail="Invalid photo checksum.")
+    filename = os.path.basename(req.filename or "")
+    extension = os.path.splitext(filename)[1].lower()
+    supported_types = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".webp": "image/webp",
+    }
+    if extension not in supported_types or req.mime_type.lower() != supported_types[extension]:
+        raise HTTPException(status_code=400, detail="Only matching JPG, PNG, and WEBP photo files are supported.")
+
+    safe_patient_id = re.sub(r"[^A-Za-z0-9_-]", "_", patient["patient_id"])
+    safe_visit_id = re.sub(r"[^A-Za-z0-9_-]", "_", visit_id)
+    stored_filename = f"WOUND_{safe_patient_id}_{safe_visit_id}_{req.sha256.lower()[:32]}{extension}"
+    existing_photo = db.get_wound_visit_photo_by_filename(visit_id, stored_filename)
+    if existing_photo:
+        return db.get_wound_visit(visit_id)
+    if not db.wound_photo_storage_ready():
+        raise HTTPException(status_code=503, detail="Persistent wound-photo storage is not configured.")
+
+    validation_path = os.path.join(tempfile.gettempdir(), f"wound_verify_{uuid.uuid4().hex}{extension}")
+    try:
+        if not db.retrieve_uploaded_file(stored_filename, validation_path):
+            raise HTTPException(status_code=400, detail="Photo upload was not found in secure storage; no visit photo was recorded.")
+        validation = validate_wound_image_file(validation_path, filename)
+        if not validation.get("is_valid"):
+            try:
+                db.delete_uploaded_file(stored_filename)
+            except Exception:
+                logger.exception("Could not delete invalid wound photo %s", stored_filename)
+            raise HTTPException(
+                status_code=400,
+                detail=validation.get("reason", "Uploaded file is not a valid JPG, PNG, or WEBP image.")
+            )
+        with open(validation_path, "rb") as image_file:
+            actual_sha256 = hashlib.sha256(image_file.read()).hexdigest()
+        if (
+            validation.get("mime_type") != req.mime_type.lower()
+            or validation.get("size_bytes") != req.size_bytes
+            or actual_sha256 != req.sha256.lower()
+        ):
+            try:
+                db.delete_uploaded_file(stored_filename)
+            except Exception:
+                logger.exception("Could not delete wound photo with invalid metadata %s", stored_filename)
+            raise HTTPException(status_code=400, detail="Stored photo content did not match its upload metadata; no visit photo was recorded.")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Could not verify wound photo %s in persistent storage", stored_filename)
+        try:
+            db.delete_uploaded_file(stored_filename)
+        except Exception:
+            logger.exception("Could not clean up unverifiable wound photo %s", stored_filename)
+        raise HTTPException(status_code=502, detail=f"Could not verify the uploaded photo in secure storage: {exc}") from exc
+    finally:
+        if os.path.exists(validation_path):
+            try:
+                os.remove(validation_path)
+            except OSError:
+                logger.warning("Could not remove wound photo validation file %s", validation_path)
+
+    try:
+        db.add_photo_to_wound_visit(
+            visit_id=visit_id,
+            patient_id=patient["patient_id"],
+            image_path=stored_filename,
+            image_filename=stored_filename,
+            image_mime_type=req.mime_type.lower(),
+            image_size_bytes=req.size_bytes
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    db.log_activity(
+        user_info.get("user_id", "CLINICIAN"),
+        user_info.get("user_name", "Clinician"),
+        user_info.get("role", "DOCTOR"),
+        f"Uploaded a photo to wound visit {visit_id} for {patient['full_name']} (Pending Analysis)",
+        "WOUND_VISIT",
+        visit_id
+    )
+    return db.get_wound_visit(visit_id)
+
+
 @app.delete("/api/wounds/{patient_id}/visits/{visit_id}/photos/{photo_id}")
 def delete_photo_from_wound_visit(
     patient_id: str,
@@ -1992,13 +2233,15 @@ def delete_photo_from_wound_visit(
     photo_id: str,
     request: Request
 ):
-    """Remove an individual photo from a visit before or after analysis."""
+    """Remove an individual photo only while the visit is still pending."""
     user_info = require_active_user(request)
     visit = db.get_wound_visit(visit_id)
     if not visit:
         raise HTTPException(status_code=404, detail="Wound visit not found.")
     if visit.get("patient_id") != patient_id:
         raise HTTPException(status_code=400, detail="Patient ID mismatch.")
+    if visit.get("status") == "ANALYZED":
+        raise HTTPException(status_code=409, detail="Photos from an analyzed visit are locked to preserve the original history.")
 
     success = db.remove_photo_from_wound_visit(visit_id, photo_id)
     if not success:
@@ -2031,6 +2274,8 @@ def analyze_monthly_wound_visit(
         raise HTTPException(status_code=404, detail="Wound visit not found.")
     if visit.get("patient_id") != patient["patient_id"]:
         raise HTTPException(status_code=400, detail="Patient ID mismatch.")
+    if visit.get("status") == "ANALYZED":
+        raise HTTPException(status_code=409, detail="This visit has already been analyzed. Create a new visit to preserve its original analysis.")
 
     photos = visit.get("photos", [])
     if not photos:
@@ -2042,8 +2287,12 @@ def analyze_monthly_wound_visit(
         loc_path = os.path.join(storage_dir, p["image_filename"])
         if not os.path.isfile(loc_path):
             temp_dest = os.path.join(tempfile.gettempdir(), p["image_filename"])
-            if db.retrieve_uploaded_file(p["image_filename"], temp_dest):
-                loc_path = temp_dest
+            if not db.retrieve_uploaded_file(p["image_filename"], temp_dest):
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"Photo {p.get('original_filename', p['image_filename'])} is unavailable in photo storage. Analysis was not run."
+                )
+            loc_path = temp_dest
         image_paths.append(loc_path)
 
     raw_reports = db.get_patient_reports(patient["patient_id"])
@@ -2128,6 +2377,9 @@ def compare_monthly_wound_visits(
 
     v1_id = req.visit_id_1 or req.visit_id_a
     v2_id = req.visit_id_2 or req.visit_id_b
+
+    if not v1_id or not v2_id or v1_id == v2_id:
+        raise HTTPException(status_code=400, detail="Select two distinct wound visits to compare.")
 
     v1 = db.get_wound_visit(v1_id) if v1_id else None
     v2 = db.get_wound_visit(v2_id) if v2_id else None

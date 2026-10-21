@@ -330,6 +330,9 @@ export interface WoundVisitRecord {
 
 export interface WoundVisitComparisonResult {
   patient_id: string;
+  comparison_reliable: boolean;
+  comparison_confidence: string;
+  inconclusive_reason?: string;
   baseline_visit: {
     visit_id: string;
     visit_date: string;
@@ -339,8 +342,9 @@ export interface WoundVisitComparisonResult {
     photo_count: number;
     photos: WoundVisitPhoto[];
     summary: string;
-    severity_indicator: string;
-    tissue_breakdown: WoundTissueBreakdown;
+    analysis_result?: Record<string, any>;
+    severity_indicator?: string | null;
+    tissue_breakdown: Partial<WoundTissueBreakdown>;
   };
   current_visit: {
     visit_id: string;
@@ -351,17 +355,18 @@ export interface WoundVisitComparisonResult {
     photo_count: number;
     photos: WoundVisitPhoto[];
     summary: string;
-    severity_indicator: string;
-    tissue_breakdown: WoundTissueBreakdown;
+    analysis_result?: Record<string, any>;
+    severity_indicator?: string | null;
+    tissue_breakdown: Partial<WoundTissueBreakdown>;
   };
   progress_status: 'Improving' | 'Worsening' | 'Mixed / Needs Monitoring' | 'No Clear Change' | 'Unable to Assess' | string;
   tissue_changes: {
-    granulation_delta: number;
-    slough_delta: number;
-    necrotic_delta: number;
-    epithelial_delta: number;
-    baseline_breakdown: WoundTissueBreakdown;
-    current_breakdown: WoundTissueBreakdown;
+    granulation_delta: number | null;
+    slough_delta: number | null;
+    necrotic_delta: number | null;
+    epithelial_delta: number | null;
+    baseline_breakdown: Partial<WoundTissueBreakdown>;
+    current_breakdown: Partial<WoundTissueBreakdown>;
   };
   findings_trajectory: {
     improved_findings: string[];

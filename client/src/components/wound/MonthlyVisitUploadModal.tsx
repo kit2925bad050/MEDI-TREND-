@@ -16,7 +16,13 @@ import {
   Layers,
 } from 'lucide-react';
 import { PatientProfile, WoundVisitRecord } from '../../types';
-import { createWoundVisit, uploadWoundVisitPhotos } from '../../services/api';
+import {
+  createWoundVisit,
+  fetchSingleWoundVisit,
+  getWoundImageUrl,
+  uploadWoundVisitPhotos,
+  WoundVisitPhotoUploadError,
+} from '../../services/api';
 import { useLanguage } from '../../context/LanguageContext';
 
 interface MonthlyVisitUploadModalProps {
@@ -80,9 +86,11 @@ export const MonthlyVisitUploadModal: React.FC<MonthlyVisitUploadModalProps> = (
   const [doctorNotes, setDoctorNotes] = useState<string>(
     existingVisit?.doctor_notes || ''
   );
+  const [savedVisit, setSavedVisit] = useState<WoundVisitRecord | null>(existingVisit || null);
   const [allowDuplicateDate, setAllowDuplicateDate] = useState<boolean>(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const persistedVisit = savedVisit || existingVisit;
 
   if (!isOpen) return null;
 
@@ -103,8 +111,9 @@ export const MonthlyVisitUploadModal: React.FC<MonthlyVisitUploadModalProps> = (
     const files = Array.from(e.target.files || []);
     if (!files.length) return;
 
-    const currentCount = (existingVisit?.photo_count || 0) + selectedFiles.length;
+    const currentCount = (persistedVisit?.photo_count || 0) + selectedFiles.length;
     if (currentCount + files.length > 10) {
+      if (fileInputRef.current) fileInputRef.current.value = '';
       setErrorMessage(
         isTamil
           ? `ஒரு வருகைக்கு அதிகபட்சம் 10 புகைப்படங்கள் மட்டுமே அனுமதிக்கப்படும். ஏற்கனவே ${currentCount} படங்கள் உள்ளன.`
@@ -113,11 +122,18 @@ export const MonthlyVisitUploadModal: React.FC<MonthlyVisitUploadModalProps> = (
       return;
     }
 
-    const validExtensions = ['image/jpeg', 'image/png', 'image/webp'];
-    const newItems: { file: File; preview: string }[] = [];
+    const mimeTypesByExtension: Record<string, string> = {
+      jpg: 'image/jpeg',
+      jpeg: 'image/jpeg',
+      png: 'image/png',
+      webp: 'image/webp',
+    };
 
     for (const file of files) {
-      if (!validExtensions.includes(file.type)) {
+      const extension = file.name.split('.').pop()?.toLowerCase() || '';
+      const expectedMimeType = mimeTypesByExtension[extension];
+      if (!expectedMimeType || (file.type && file.type !== expectedMimeType)) {
+        if (fileInputRef.current) fileInputRef.current.value = '';
         setErrorMessage(
           isTamil
             ? `தவறான கோப்பு வடிவம்: ${file.name}. JPG, PNG அல்லது WEBP வடிவங்களை மட்டுமே பதிவேற்றவும்.`
@@ -126,6 +142,7 @@ export const MonthlyVisitUploadModal: React.FC<MonthlyVisitUploadModalProps> = (
         return;
       }
       if (file.size > 20 * 1024 * 1024) {
+        if (fileInputRef.current) fileInputRef.current.value = '';
         setErrorMessage(
           isTamil
             ? `கோப்பு ${file.name} 20MB வரம்பை தாண்டியுள்ளது.`
@@ -133,12 +150,12 @@ export const MonthlyVisitUploadModal: React.FC<MonthlyVisitUploadModalProps> = (
         );
         return;
       }
-      newItems.push({
-        file,
-        preview: URL.createObjectURL(file),
-      });
     }
 
+    const newItems = files.map((file) => ({
+      file,
+      preview: URL.createObjectURL(file),
+    }));
     setSelectedFiles((prev) => [...prev, ...newItems]);
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
@@ -156,7 +173,7 @@ export const MonthlyVisitUploadModal: React.FC<MonthlyVisitUploadModalProps> = (
     e.preventDefault();
     setErrorMessage(null);
 
-    const totalPhotos = (existingVisit?.photo_count || 0) + selectedFiles.length;
+    const totalPhotos = (persistedVisit?.photo_count || 0) + selectedFiles.length;
     if (totalPhotos < 1) {
       setErrorMessage(
         isTamil
@@ -168,6 +185,7 @@ export const MonthlyVisitUploadModal: React.FC<MonthlyVisitUploadModalProps> = (
 
     setIsSubmitting(true);
 
+    let visitRecord: WoundVisitRecord | undefined;
     try {
       const finalLocation =
         woundLocation === 'Other / Custom Anatomical Site'
@@ -175,9 +193,8 @@ export const MonthlyVisitUploadModal: React.FC<MonthlyVisitUploadModalProps> = (
           : woundLocation;
 
       // 1. Create or get existing visit
-      let visitRecord: WoundVisitRecord;
-      if (existingVisit) {
-        visitRecord = existingVisit;
+      if (persistedVisit) {
+        visitRecord = persistedVisit;
       } else {
         visitRecord = await createWoundVisit(patient.patientId, {
           visit_date: visitDate,
@@ -195,15 +212,62 @@ export const MonthlyVisitUploadModal: React.FC<MonthlyVisitUploadModalProps> = (
       }
 
       onSuccess(visitRecord);
+      setSavedVisit(visitRecord);
       handleClose();
     } catch (err: any) {
       console.error('Visit save error:', err);
-      setErrorMessage(
-        err.message ||
+      if (err instanceof WoundVisitPhotoUploadError) {
+        setSavedVisit(err.savedVisit);
+        onSuccess(err.savedVisit);
+        const uploaded = new Set(err.uploadedFiles);
+        setSelectedFiles((prev) => prev.filter((item) => {
+          if (!uploaded.has(item.file)) return true;
+          URL.revokeObjectURL(item.preview);
+          return false;
+        }));
+        setErrorMessage(
+          `${err.message} ${err.uploadedFiles.length} photo(s) were saved and remain pending; retry the remaining photos.`
+        );
+      } else {
+        let failureMessage =
+          err.message ||
           (isTamil
             ? 'வருகைப் பதிவேற்றம் தோல்வியடைந்தது. மீண்டும் முயற்சிக்கவும்.'
-            : 'Failed to record wound visit. Please check the network and try again.')
-      );
+            : 'Failed to record wound visit. Please check the network and try again.');
+        if (visitRecord) {
+          try {
+            const refreshedVisit = await fetchSingleWoundVisit(patient.patientId, visitRecord.visit_id);
+            setSavedVisit(refreshedVisit);
+            onSuccess(refreshedVisit);
+            const confirmedUploads = new Set<File>();
+            try {
+              for (const item of selectedFiles) {
+                const digest = await crypto.subtle.digest('SHA-256', await item.file.arrayBuffer());
+                const sha256 = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+                const extension = item.file.name.split('.').pop()?.toLowerCase() || '';
+                if (refreshedVisit.photos.some((photo) => photo.image_filename.endsWith(`_${sha256.slice(0, 32)}.${extension}`))) {
+                  confirmedUploads.add(item.file);
+                }
+              }
+            } catch (fingerprintError) {
+              console.error('Could not match uploaded photos after failure:', fingerprintError);
+            }
+            if (confirmedUploads.size > 0) {
+              setSelectedFiles((prev) => prev.filter((item) => {
+                if (!confirmedUploads.has(item.file)) return true;
+                URL.revokeObjectURL(item.preview);
+                return false;
+              }));
+              failureMessage = `${failureMessage} ${confirmedUploads.size} photo(s) were saved and remain pending; retry the remaining photos.`;
+            }
+          } catch (refreshError) {
+            console.error('Could not refresh visit after photo upload failure:', refreshError);
+            setSavedVisit(visitRecord);
+            onSuccess(visitRecord);
+          }
+        }
+        setErrorMessage(failureMessage);
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -216,7 +280,7 @@ export const MonthlyVisitUploadModal: React.FC<MonthlyVisitUploadModalProps> = (
     onClose();
   };
 
-  const totalPhotosCount = (existingVisit?.photo_count || 0) + selectedFiles.length;
+  const totalPhotosCount = (persistedVisit?.photo_count || 0) + selectedFiles.length;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm overflow-y-auto">
@@ -229,7 +293,7 @@ export const MonthlyVisitUploadModal: React.FC<MonthlyVisitUploadModalProps> = (
                 <Calendar className="w-5 h-5" />
               </span>
               <h2 className="text-lg font-bold text-slate-900 dark:text-white">
-                {existingVisit
+                {persistedVisit
                   ? isTamil ? 'கூடுதல் புகைப்படங்கள் சேர்க்கவும்' : 'Add Photos to Monthly Visit'
                   : isTamil ? 'புதிய மாதாந்திர புண் வருகைப் பதிவு' : 'New Monthly Wound Visit'}
               </h2>
@@ -286,7 +350,7 @@ export const MonthlyVisitUploadModal: React.FC<MonthlyVisitUploadModalProps> = (
                 type="date"
                 value={visitDate}
                 onChange={(e) => setVisitDate(e.target.value)}
-                disabled={Boolean(existingVisit)}
+                disabled={Boolean(persistedVisit)}
                 className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 text-xs focus:ring-2 focus:ring-rose-500 disabled:opacity-60"
                 required
               />
@@ -314,7 +378,7 @@ export const MonthlyVisitUploadModal: React.FC<MonthlyVisitUploadModalProps> = (
               <select
                 value={woundLocation}
                 onChange={(e) => setWoundLocation(e.target.value)}
-                disabled={Boolean(existingVisit)}
+                disabled={Boolean(persistedVisit)}
                 className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 text-xs focus:ring-2 focus:ring-rose-500"
               >
                 {COMMON_LOCATIONS.map((loc) => (
@@ -333,7 +397,7 @@ export const MonthlyVisitUploadModal: React.FC<MonthlyVisitUploadModalProps> = (
               <select
                 value={woundTypeTag}
                 onChange={(e) => setWoundTypeTag(e.target.value)}
-                disabled={Boolean(existingVisit)}
+                disabled={Boolean(persistedVisit)}
                 className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 text-xs focus:ring-2 focus:ring-rose-500"
               >
                 {WOUND_TYPES.map((type) => (
@@ -404,13 +468,13 @@ export const MonthlyVisitUploadModal: React.FC<MonthlyVisitUploadModalProps> = (
             )}
 
             {/* Existing Photos (if editing/adding to visit) */}
-            {existingVisit && existingVisit.photos.length > 0 && (
+            {persistedVisit && persistedVisit.photos.length > 0 && (
               <div className="mt-3 space-y-1.5">
                 <span className="text-[11px] font-bold text-slate-500">Previously uploaded in this visit:</span>
                 <div className="grid grid-cols-4 sm:grid-cols-5 gap-2">
-                  {existingVisit.photos.map((p, i) => (
+                  {persistedVisit.photos.map((p, i) => (
                     <div key={p.photo_id} className="relative rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700 aspect-square group bg-slate-100">
-                      <img src={p.image_url} alt={`Existing Photo ${i+1}`} className="w-full h-full object-cover" />
+                      <img src={getWoundImageUrl(p.image_filename)} alt={`Existing Photo ${i+1}`} className="w-full h-full object-cover" />
                       <div className="absolute bottom-1 left-1 px-1 bg-black/60 text-[9px] text-white rounded font-mono">
                         #{i+1}
                       </div>
@@ -509,7 +573,7 @@ export const MonthlyVisitUploadModal: React.FC<MonthlyVisitUploadModalProps> = (
                 <>
                   <Upload className="w-3.5 h-3.5" />
                   <span>
-                    {existingVisit
+                    {persistedVisit
                       ? isTamil ? `புகைப்படங்களைச் சேர் (${selectedFiles.length})` : `Add ${selectedFiles.length} Photos`
                       : isTamil ? `வருகையைப் பதிவு செய் (${totalPhotosCount} படங்கள்)` : `Save Visit (${totalPhotosCount} Photos)`}
                   </span>
