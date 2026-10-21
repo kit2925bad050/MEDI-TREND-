@@ -189,6 +189,38 @@ CREATE TABLE IF NOT EXISTS wound_assessments (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+-- 12. Wound Monthly Visits Table
+CREATE TABLE IF NOT EXISTS wound_visits (
+    id VARCHAR(64) PRIMARY KEY,
+    visit_id VARCHAR(64) UNIQUE NOT NULL,
+    patient_id VARCHAR(32) NOT NULL REFERENCES patients(patient_id) ON DELETE CASCADE,
+    visit_date VARCHAR(32) NOT NULL,
+    visit_month VARCHAR(64) NOT NULL,
+    wound_location VARCHAR(128) DEFAULT 'Unspecified',
+    wound_type_tag VARCHAR(128) DEFAULT 'Unspecified',
+    status VARCHAR(32) DEFAULT 'PENDING',
+    doctor_notes TEXT DEFAULT '',
+    uploaded_by VARCHAR(128) NOT NULL,
+    analysis_result JSONB,
+    analyzed_at VARCHAR(64),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 13. Wound Visit Photos Table (1 to 10 photos per monthly visit)
+CREATE TABLE IF NOT EXISTS wound_visit_photos (
+    id VARCHAR(64) PRIMARY KEY,
+    photo_id VARCHAR(64) UNIQUE NOT NULL,
+    visit_id VARCHAR(64) NOT NULL REFERENCES wound_visits(visit_id) ON DELETE CASCADE,
+    patient_id VARCHAR(32) NOT NULL REFERENCES patients(patient_id) ON DELETE CASCADE,
+    image_path TEXT NOT NULL,
+    image_filename VARCHAR(256) NOT NULL,
+    image_mime_type VARCHAR(64) NOT NULL,
+    image_size_bytes INTEGER NOT NULL,
+    order_index INTEGER DEFAULT 0,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
 -- ==========================================================
 -- SEED INITIAL DESIGNATED ADMINISTRATIVE & CLINICAL ACCOUNTS
 -- ==========================================================

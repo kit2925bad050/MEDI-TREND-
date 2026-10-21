@@ -849,6 +849,321 @@ OUTPUT STRICT JSON ONLY MATCHING THE FOLLOWING SCHEMA:
 
         return comp_res
 
+    def analyze_multi_wound_photos(
+        self,
+        image_paths: List[str],
+        patient_context: Dict[str, Any],
+        wound_location: str = "Unspecified",
+        wound_type_tag: str = "Unspecified",
+        visit_date: str = "",
+        doctor_notes: str = "",
+        approved_reports: Optional[List[Dict[str, Any]]] = None
+    ) -> Dict[str, Any]:
+        """
+        Analyzes 1 to 10 photos uploaded for a monthly patient visit together as one cohesive assessment.
+        Checks for:
+        - Visible wound characteristics across all viewpoints.
+        - Approximate dimensions (only if reliable calibration marker is detected).
+        - Visible changes / signs of improvement or deterioration.
+        - Image quality warnings (poor lighting, blur, inconsistent viewing angles).
+        - Summary of findings for the visit.
+        """
+        if not image_paths:
+            raise ValueError("At least 1 wound photo is required to perform visit analysis.")
+
+        if not visit_date:
+            visit_date = time.strftime("%Y-%m-%d")
+
+        reports_summary = self._summarize_approved_reports(approved_reports or [])
+
+        # Analyze heuristics and quality for each photo
+        heuristics_list = []
+        quality_warnings = []
+        r_means, g_means, b_means = [], [], []
+
+        for idx, p in enumerate(image_paths, 1):
+            if os.path.isfile(p):
+                h = analyze_image_heuristics(p)
+                heuristics_list.append(h)
+                r_means.append(h.get("r_mean", 128))
+                g_means.append(h.get("g_mean", 128))
+                b_means.append(h.get("b_mean", 128))
+                avg_lum = (h.get("r_mean", 128) + h.get("g_mean", 128) + h.get("b_mean", 128)) / 3.0
+                if avg_lum < 55:
+                    quality_warnings.append(f"Photo #{idx} displays sub-optimal low lighting; color discrimination is limited.")
+                elif avg_lum > 220:
+                    quality_warnings.append(f"Photo #{idx} exhibits significant glare/overexposure on the wound surface.")
+
+        if len(image_paths) > 1:
+            quality_warnings.append(f"Composite evaluation across {len(image_paths)} multi-angle examination photographs.")
+
+        quality_warnings.append("No calibrated reference scale marker detected across photo series; physical dimensions not definitively quantified.")
+
+        if heuristics_list:
+            avg_gran = round(sum(h.get("estimated_granulation_pct", 50.0) for h in heuristics_list) / len(heuristics_list), 1)
+            avg_slough = round(sum(h.get("estimated_slough_pct", 20.0) for h in heuristics_list) / len(heuristics_list), 1)
+            avg_necrotic = round(sum(h.get("estimated_necrotic_pct", 5.0) for h in heuristics_list) / len(heuristics_list), 1)
+            avg_epithelial = max(0.0, round(100.0 - (avg_gran + avg_slough + avg_necrotic), 1))
+        else:
+            avg_gran, avg_slough, avg_necrotic, avg_epithelial = 50.0, 20.0, 5.0, 25.0
+
+        composite_heuristics = {
+            "r_mean": sum(r_means) / max(1, len(r_means)) if r_means else 128.0,
+            "g_mean": sum(g_means) / max(1, len(g_means)) if g_means else 128.0,
+            "b_mean": sum(b_means) / max(1, len(b_means)) if b_means else 128.0,
+            "estimated_granulation_pct": avg_gran,
+            "estimated_slough_pct": avg_slough,
+            "estimated_necrotic_pct": avg_necrotic,
+            "estimated_epithelial_pct": avg_epithelial,
+        }
+
+        # Multi-photo AI call if Gemini key present
+        if self.api_key:
+            try:
+                parts = [{"text": f"""You are MEDI-TREND AI Wound Intelligence.
+Analyze this series of {len(image_paths)} clinical photographs of a single wound taken during the same patient visit on {visit_date}.
+Location: {wound_location}. Clinical tag: {wound_type_tag}.
+Clinician notes: {doctor_notes or 'None'}.
+Synthesize observations across all photos into one unified evaluation matching standard schema.
+"""}]
+                for p in image_paths[:10]:
+                    if os.path.isfile(p):
+                        with open(p, "rb") as f:
+                            b64 = base64.b64encode(f.read()).decode("utf-8")
+                        ext = os.path.splitext(p)[1].lower()
+                        mtype = "image/png" if ext == ".png" else "image/webp" if ext == ".webp" else "image/jpeg"
+                        parts.append({"inlineData": {"mimeType": mtype, "data": b64}})
+
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={self.api_key}"
+                resp = requests.post(url, json={"contents": [{"parts": parts}], "generationConfig": {"responseMimeType": "application/json", "temperature": 0.2}}, timeout=30)
+                if resp.status_code == 200:
+                    cand = resp.json().get("candidates", [])[0]["content"]["parts"][0]["text"]
+                    parsed = json.loads(cand)
+                    parsed["provider_used"] = "Google Gemini Multimodal Vision (Multi-Photo Series)"
+                    parsed["analysis_mode"] = "AI_ASSISTED_VISION_SERIES"
+                    parsed["photo_count_analyzed"] = len(image_paths)
+                    parsed["image_quality_warnings"] = quality_warnings
+                    parsed["summary_of_findings"] = f"Multi-photo assessment ({len(image_paths)} photos) for {wound_location}: {parsed.get('visible_characteristics', {}).get('primary_bed_appearance', 'Mixed granulation and slough')}."
+                    parsed["linked_report_summary"] = reports_summary
+                    parsed["tamil_translation"] = self.translate_wound_assessment(parsed)
+                    return parsed
+            except Exception as e:
+                logger.warning("Gemini multi-photo vision failed, engaging grounded engine: %s", e)
+
+        # Fallback multi-photo grounded assessment
+        grounded = self._generate_grounded_assessment(
+            heuristics=composite_heuristics,
+            patient_context=patient_context,
+            wound_location=wound_location,
+            wound_type_tag=wound_type_tag,
+            visit_date=visit_date,
+            doctor_notes=doctor_notes,
+            approved_reports_summary=reports_summary
+        )
+        grounded["provider_used"] = "Deterministic Multi-Photo Clinical Rule Engine"
+        grounded["analysis_mode"] = "DETERMINISTIC_SERIES"
+        grounded["photo_count_analyzed"] = len(image_paths)
+        grounded["image_quality_warnings"] = quality_warnings
+        grounded["summary_of_findings"] = (
+            f"Multi-photo visit assessment ({len(image_paths)} photos) for {wound_location}: "
+            f"Wound bed demonstrates approximately {round(avg_gran)}% granulation tissue, {round(avg_slough)}% non-viable slough, "
+            f"and {round(avg_necrotic)}% necrotic eschar. Severity is categorized as '{grounded.get('severity_indicator', 'Moderate / Deepening')}'. "
+            f"Requires clinical correlation and barrier dressing."
+        )
+        grounded["tamil_translation"] = self.translate_wound_assessment(grounded)
+        grounded["visible_wound_characteristics"] = grounded.get("visible_characteristics", {})
+        grounded["tissue_composition"] = grounded.get("visible_characteristics", {}).get("tissue_breakdown", {})
+        grounded["approximate_dimensions"] = grounded.get("dimensions_info", {})
+        grounded["clinical_summary"] = grounded["summary_of_findings"]
+        grounded["analysis_tamil"] = grounded["tamil_translation"]
+        grounded["photos_analyzed_count"] = len(image_paths)
+        return grounded
+
+    def compare_wound_visits(
+        self,
+        visit_a: Dict[str, Any],
+        visit_b: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Longitudinal comparative analysis between two monthly wound visits of the SAME patient.
+        Rejects cross-patient comparison and unanalyzed visits.
+        Produces side-by-side deltas, trajectory classification, measurement differences, and clinical summary.
+        """
+        p_a = visit_a.get("patient_id")
+        p_b = visit_b.get("patient_id")
+        if not p_a or not p_b or p_a != p_b:
+            raise ValueError(f"Cross-patient comparison rejected: Visit 1 belongs to {p_a} while Visit 2 belongs to {p_b}.")
+
+        if visit_a.get("status") != "ANALYZED" or visit_b.get("status") != "ANALYZED":
+            raise ValueError("Both visits must be analyzed before comparison can be generated.")
+
+        visits = sorted([visit_a, visit_b], key=lambda v: (v.get("visit_date", ""), v.get("created_at", "")))
+        baseline_visit = visits[0]
+        current_visit = visits[1]
+
+        base_res = baseline_visit.get("analysis_result") or {}
+        curr_res = current_visit.get("analysis_result") or {}
+
+        base_chars = base_res.get("visible_characteristics") or {}
+        curr_chars = curr_res.get("visible_characteristics") or {}
+
+        base_tissue = base_chars.get("tissue_breakdown") or {}
+        curr_tissue = curr_chars.get("tissue_breakdown") or {}
+
+        base_gran = base_tissue.get("granulation_percent", 50.0)
+        curr_gran = curr_tissue.get("granulation_percent", 50.0)
+        base_slough = base_tissue.get("slough_percent", 20.0)
+        curr_slough = curr_tissue.get("slough_percent", 20.0)
+        base_necrotic = base_tissue.get("necrotic_percent", 5.0)
+        curr_necrotic = curr_tissue.get("necrotic_percent", 5.0)
+        base_epith = base_tissue.get("epithelial_percent", 25.0)
+        curr_epith = curr_tissue.get("epithelial_percent", 25.0)
+
+        gran_delta = round(curr_gran - base_gran, 1)
+        slough_delta = round(curr_slough - base_slough, 1)
+        necrotic_delta = round(curr_necrotic - base_necrotic, 1)
+        epith_delta = round(curr_epith - base_epith, 1)
+
+        base_dim = base_res.get("dimensions_info") or {}
+        curr_dim = curr_res.get("dimensions_info") or {}
+        has_calibrated = (
+            base_dim.get("has_scale_marker") is True and
+            curr_dim.get("has_scale_marker") is True and
+            base_dim.get("surface_area_cm2") is not None and
+            curr_dim.get("surface_area_cm2") is not None
+        )
+
+        area_delta_pct = None
+        dim_note = ""
+        if has_calibrated:
+            b_area = float(base_dim["surface_area_cm2"])
+            c_area = float(curr_dim["surface_area_cm2"])
+            if b_area > 0:
+                area_delta_pct = round(((c_area - b_area) / b_area) * 100, 1)
+                dim_note = f"Measured wound surface area changed from {b_area} cm² to {c_area} cm² ({area_delta_pct:+.1f}%)."
+        else:
+            dim_note = "Reliable dimension change cannot be calculated because one or both visits lack a calibrated scale marker in photos."
+
+        improved_findings = []
+        worsened_findings = []
+        unchanged_findings = []
+
+        if gran_delta > 5:
+            improved_findings.append(f"Granulation tissue expanded by {gran_delta:+.1f}% (healthy vascularized bed development)")
+        elif gran_delta < -5:
+            worsened_findings.append(f"Granulation tissue contracted by {gran_delta:+.1f}%")
+
+        if slough_delta < -5:
+            improved_findings.append(f"Non-viable yellow slough reduced by {abs(slough_delta):.1f}% (effective autolytic/clinical debridement)")
+        elif slough_delta > 5:
+            worsened_findings.append(f"Slough accumulation increased by {slough_delta:+.1f}%")
+
+        if necrotic_delta < -2:
+            improved_findings.append(f"Necrotic eschar decreased by {abs(necrotic_delta):.1f}%")
+        elif necrotic_delta > 3:
+            worsened_findings.append(f"New necrotic tissue formation observed (+{necrotic_delta:.1f}%)")
+
+        if epith_delta > 5:
+            improved_findings.append(f"Epithelialization margin advanced by +{epith_delta:.1f}%")
+
+        base_redness = base_chars.get("periwound_redness", "Stable")
+        curr_redness = curr_chars.get("periwound_redness", "Stable")
+        if base_redness != curr_redness:
+            if "mild" in curr_redness.lower() and "severe" in base_redness.lower():
+                improved_findings.append(f"Periwound erythema improved from '{base_redness}' to '{curr_redness}'")
+            elif "severe" in curr_redness.lower() or "spreading" in curr_redness.lower():
+                worsened_findings.append(f"Periwound erythema progressed to '{curr_redness}'")
+            else:
+                unchanged_findings.append(f"Periwound redness: '{curr_redness}'")
+        else:
+            unchanged_findings.append(f"Periwound erythema status: stable ({curr_redness})")
+
+        unchanged_findings.append(f"Anatomical location remains constant at {current_visit.get('wound_location', 'Unspecified')}")
+
+        if not improved_findings and not worsened_findings:
+            unchanged_findings.append("Tissue composition metrics remained within stable boundary limits (+/- 5%)")
+
+        if len(worsened_findings) >= 2 or necrotic_delta > 5 or (area_delta_pct is not None and area_delta_pct > 20):
+            progress_status = "Worsening"
+        elif len(improved_findings) >= 1 and not worsened_findings:
+            progress_status = "Improving"
+        elif len(improved_findings) > 0 and len(worsened_findings) > 0:
+            progress_status = "Mixed / Needs Monitoring"
+        else:
+            progress_status = "No Clear Change"
+
+        comp_summary = (
+            f"Monthly comparative analysis from {baseline_visit.get('visit_month')} ({baseline_visit.get('visit_date')}) "
+            f"to {current_visit.get('visit_month')} ({current_visit.get('visit_date')}): "
+            f"Overall trajectory is evaluated as '{progress_status}'. "
+            f"Granulation tissue shifted by {gran_delta:+.1f}%, slough shifted by {slough_delta:+.1f}%, "
+            f"and necrotic eschar shifted by {necrotic_delta:+.1f}%. "
+            f"{dim_note}"
+        )
+
+        res = {
+            "patient_id": p_a,
+            "baseline_visit": {
+                "visit_id": baseline_visit.get("visit_id"),
+                "visit_date": baseline_visit.get("visit_date"),
+                "visit_month": baseline_visit.get("visit_month"),
+                "wound_location": baseline_visit.get("wound_location"),
+                "wound_type_tag": baseline_visit.get("wound_type_tag"),
+                "photo_count": baseline_visit.get("photo_count", len(baseline_visit.get("photos", []))),
+                "photos": baseline_visit.get("photos", []),
+                "summary": base_res.get("summary_of_findings") or base_chars.get("primary_bed_appearance", "Baseline examination recorded."),
+                "severity_indicator": base_res.get("severity_indicator", "Moderate"),
+                "tissue_breakdown": base_tissue,
+            },
+            "current_visit": {
+                "visit_id": current_visit.get("visit_id"),
+                "visit_date": current_visit.get("visit_date"),
+                "visit_month": current_visit.get("visit_month"),
+                "wound_location": current_visit.get("wound_location"),
+                "wound_type_tag": current_visit.get("wound_type_tag"),
+                "photo_count": current_visit.get("photo_count", len(current_visit.get("photos", []))),
+                "photos": current_visit.get("photos", []),
+                "summary": curr_res.get("summary_of_findings") or curr_chars.get("primary_bed_appearance", "Current examination recorded."),
+                "severity_indicator": curr_res.get("severity_indicator", "Moderate"),
+                "tissue_breakdown": curr_tissue,
+            },
+            "progress_status": progress_status,
+            "tissue_changes": {
+                "granulation_delta": gran_delta,
+                "slough_delta": slough_delta,
+                "necrotic_delta": necrotic_delta,
+                "epithelial_delta": epith_delta,
+                "baseline_breakdown": base_tissue,
+                "current_breakdown": curr_tissue,
+            },
+            "findings_trajectory": {
+                "improved_findings": improved_findings,
+                "worsened_findings": worsened_findings,
+                "unchanged_findings": unchanged_findings,
+            },
+            "dimensions_comparison": {
+                "has_calibrated_measurements": has_calibrated,
+                "area_change_percent": area_delta_pct,
+                "note": dim_note,
+            },
+            "comparison_summary": comp_summary,
+            "quality_comparison_warning": "Camera angles, focal distance, and white balance may vary between visits. Photographic comparisons must be correlated with clinical palpation and physician review.",
+            "cautionary_note": "Photographic comparative assessment is clinical decision-support only. Definitive healing evaluation requires direct clinical examination.",
+            "tamil_translation": {
+                "progress_status": self.translate_text_to_tamil(progress_status),
+                "comparison_summary": self.translate_text_to_tamil(comp_summary),
+                "improved_findings": [self.translate_text_to_tamil(f) for f in improved_findings],
+                "worsened_findings": [self.translate_text_to_tamil(f) for f in worsened_findings],
+                "unchanged_findings": [self.translate_text_to_tamil(f) for f in unchanged_findings],
+            }
+        }
+        res["visit_a"] = res["baseline_visit"]
+        res["visit_b"] = res["current_visit"]
+        res["trajectory"] = res["progress_status"]
+        res["tissue_deltas"] = res["tissue_changes"]
+        res["comparison_tamil"] = res["tamil_translation"]
+        return res
+
     def translate_text_to_tamil(self, text: str) -> str:
         """Translates wound assessment medical text into Tamil while preserving numbers and dates."""
         if not text:

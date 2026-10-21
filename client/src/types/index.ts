@@ -293,3 +293,94 @@ export interface WoundComparisonResult {
   detailed_points: string[];
   cautionary_note: string;
 }
+
+// ==================== MONTHLY WOUND PHOTO TRACKING & COMPARISON TYPES ====================
+export interface WoundVisitPhoto {
+  id: string;
+  photo_id: string;
+  visit_id: string;
+  patient_id: string;
+  image_path: string;
+  image_filename: string;
+  image_mime_type: string;
+  image_size_bytes: number;
+  order_index: number;
+  image_url: string;
+  created_at: string;
+}
+
+export interface WoundVisitRecord {
+  id: string;
+  visit_id: string;
+  patient_id: string;
+  visit_date: string;
+  visit_month: string;
+  wound_location: string;
+  wound_type_tag: string;
+  status: 'PENDING' | 'ANALYZED' | 'FAILED' | string;
+  doctor_notes: string;
+  uploaded_by: string;
+  analysis_result?: any;
+  analyzed_at?: string | null;
+  photos: WoundVisitPhoto[];
+  photo_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WoundVisitComparisonResult {
+  patient_id: string;
+  baseline_visit: {
+    visit_id: string;
+    visit_date: string;
+    visit_month: string;
+    wound_location: string;
+    wound_type_tag: string;
+    photo_count: number;
+    photos: WoundVisitPhoto[];
+    summary: string;
+    severity_indicator: string;
+    tissue_breakdown: WoundTissueBreakdown;
+  };
+  current_visit: {
+    visit_id: string;
+    visit_date: string;
+    visit_month: string;
+    wound_location: string;
+    wound_type_tag: string;
+    photo_count: number;
+    photos: WoundVisitPhoto[];
+    summary: string;
+    severity_indicator: string;
+    tissue_breakdown: WoundTissueBreakdown;
+  };
+  progress_status: 'Improving' | 'Worsening' | 'Mixed / Needs Monitoring' | 'No Clear Change' | 'Unable to Assess' | string;
+  tissue_changes: {
+    granulation_delta: number;
+    slough_delta: number;
+    necrotic_delta: number;
+    epithelial_delta: number;
+    baseline_breakdown: WoundTissueBreakdown;
+    current_breakdown: WoundTissueBreakdown;
+  };
+  findings_trajectory: {
+    improved_findings: string[];
+    worsened_findings: string[];
+    unchanged_findings: string[];
+  };
+  dimensions_comparison: {
+    has_calibrated_measurements: boolean;
+    area_change_percent?: number | null;
+    note: string;
+  };
+  comparison_summary: string;
+  quality_comparison_warning?: string;
+  cautionary_note: string;
+  tamil_translation?: {
+    progress_status: string;
+    comparison_summary: string;
+    improved_findings: string[];
+    worsened_findings: string[];
+    unchanged_findings: string[];
+  };
+}

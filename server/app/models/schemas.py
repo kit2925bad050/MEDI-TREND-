@@ -130,3 +130,17 @@ class WoundNotesUpdateRequest(BaseModel):
 
 class WoundComparisonRequest(BaseModel):
     assessment_ids: List[str]
+
+class WoundVisitCreateRequest(BaseModel):
+    visit_date: str
+    visit_month: Optional[str] = None
+    wound_location: Optional[str] = "Unspecified"
+    wound_type_tag: Optional[str] = "Unspecified"
+    doctor_notes: Optional[str] = ""
+    allow_duplicate_date: Optional[bool] = False
+
+class WoundVisitCompareRequest(BaseModel):
+    visit_id_1: Optional[str] = None
+    visit_id_2: Optional[str] = None
+    visit_id_a: Optional[str] = None
+    visit_id_b: Optional[str] = None

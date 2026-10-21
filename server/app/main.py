@@ -30,7 +30,8 @@ from .services.pdf_extractor import extract_parameters_from_pdf
 from .services.wound_analyzer import wound_engine, validate_wound_image_file
 from .models.schemas import (
     PatientProfile, ReportRecord, ParameterData, ComparisonRequest,
-    AIAnalysisResult, AuditLogEntry, WoundNotesUpdateRequest, WoundComparisonRequest
+    AIAnalysisResult, AuditLogEntry, WoundNotesUpdateRequest, WoundComparisonRequest,
+    WoundVisitCreateRequest, WoundVisitCompareRequest
 )
 
 app = FastAPI(
@@ -1849,6 +1850,326 @@ def delete_wound_assessment_endpoint(patient_id: str, assessment_id: str, reques
     )
 
     return {"success": True, "message": f"Wound assessment {assessment_id} successfully deleted."}
+
+
+# ==================== MONTHLY WOUND PHOTO TRACKING & COMPARISON ENDPOINTS ====================
+
+@app.post("/api/wounds/{patient_id}/visits")
+def create_monthly_wound_visit(
+    patient_id: str,
+    req: WoundVisitCreateRequest,
+    request: Request
+):
+    """
+    Create a new monthly wound tracking visit or retrieve existing pending visit.
+    Enforces authentication & doctor/staff role check.
+    """
+    user_info = require_active_user(request)
+    user_id = user_info.get("user_id") or user_info.get("id") or "CLINICIAN"
+    user_role = user_info.get("role") or "DOCTOR"
+    user_name = user_info.get("user_name") or user_info.get("name") or "Clinician"
+
+    patient = db.get_patient(patient_id)
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient profile not found.")
+
+    visit = db.create_wound_visit(
+        patient_id=patient["patient_id"],
+        visit_date=req.visit_date,
+        wound_location=req.wound_location or "Unspecified",
+        wound_type_tag=req.wound_type_tag or "Unspecified",
+        uploaded_by=user_name,
+        doctor_notes=req.doctor_notes or "",
+        allow_duplicate_date=req.allow_duplicate_date or False
+    )
+
+    db.log_activity(
+        user_id, user_name, user_role,
+        f"Created monthly wound tracking visit for {patient['full_name']} ({visit['visit_month']})",
+        "WOUND_VISIT", visit["visit_id"]
+    )
+    return visit
+
+
+@app.post("/api/wounds/{patient_id}/visits/{visit_id}/photos")
+async def upload_photos_to_wound_visit(
+    patient_id: str,
+    visit_id: str,
+    request: Request,
+    files: List[UploadFile] = File(...)
+):
+    """
+    Upload 1 to 10 wound photos for a specific monthly visit.
+    Keeps photos and visit in PENDING status until explicitly analyzed.
+    Does NOT automatically trigger analysis.
+    """
+    user_info = require_active_user(request)
+    user_id = user_info.get("user_id") or user_info.get("id") or "CLINICIAN"
+    user_role = user_info.get("role") or "DOCTOR"
+    user_name = user_info.get("user_name") or user_info.get("name") or "Clinician"
+
+    patient = db.get_patient(patient_id)
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient profile not found.")
+
+    visit = db.get_wound_visit(visit_id)
+    if not visit:
+        raise HTTPException(status_code=404, detail="Wound visit record not found.")
+
+    if visit.get("patient_id") != patient["patient_id"]:
+        raise HTTPException(status_code=400, detail="Wound visit patient mismatch.")
+
+    current_count = len(visit.get("photos", []))
+    if current_count + len(files) > 10:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot upload {len(files)} photos. Current count is {current_count}. Maximum is 10 photos per visit."
+        )
+
+    uploaded_records = []
+    for f in files:
+        upload_name = f.filename or "wound_photo.jpg"
+        ext = os.path.splitext(upload_name)[1].lower()
+        if ext not in [".jpg", ".jpeg", ".png", ".webp"]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid file format '{ext}' in '{upload_name}'. Only JPG, PNG, and WEBP are supported."
+            )
+
+        temp_filename = f"wound_multi_temp_{uuid.uuid4().hex}{ext}"
+        temp_path = os.path.join(tempfile.gettempdir(), temp_filename)
+
+        try:
+            with open(temp_path, "wb") as buffer:
+                content = await f.read()
+                if len(content) > 20 * 1024 * 1024:
+                    raise HTTPException(status_code=413, detail=f"File '{upload_name}' exceeds 20MB limit.")
+                buffer.write(content)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to process '{upload_name}'.") from exc
+
+        val_res = validate_wound_image_file(temp_path, upload_name)
+        if not val_res.get("is_valid"):
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            raise HTTPException(status_code=400, detail=val_res.get("reason", f"Invalid wound image '{upload_name}'."))
+
+        dest_filename = f"WOUND_{patient['patient_id']}_{uuid.uuid4().hex[:10]}{val_res['extension']}"
+        stored_path = db.store_uploaded_file(temp_path, dest_filename, content_type=val_res["mime_type"])
+
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
+
+        p_rec = db.add_photo_to_wound_visit(
+            visit_id=visit_id,
+            patient_id=patient["patient_id"],
+            image_path=dest_filename,
+            image_filename=dest_filename,
+            image_mime_type=val_res["mime_type"],
+            image_size_bytes=val_res["size_bytes"]
+        )
+        uploaded_records.append(p_rec)
+
+    db.log_activity(
+        user_id, user_name, user_role,
+        f"Uploaded {len(uploaded_records)} photos to wound visit {visit_id} for {patient['full_name']} (Pending Analysis)",
+        "WOUND_VISIT", visit_id
+    )
+
+    updated_visit = db.get_wound_visit(visit_id)
+    return updated_visit
+
+
+@app.delete("/api/wounds/{patient_id}/visits/{visit_id}/photos/{photo_id}")
+def delete_photo_from_wound_visit(
+    patient_id: str,
+    visit_id: str,
+    photo_id: str,
+    request: Request
+):
+    """Remove an individual photo from a visit before or after analysis."""
+    user_info = require_active_user(request)
+    visit = db.get_wound_visit(visit_id)
+    if not visit:
+        raise HTTPException(status_code=404, detail="Wound visit not found.")
+    if visit.get("patient_id") != patient_id:
+        raise HTTPException(status_code=400, detail="Patient ID mismatch.")
+
+    success = db.remove_photo_from_wound_visit(visit_id, photo_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Photo not found in visit.")
+
+    return db.get_wound_visit(visit_id)
+
+
+@app.post("/api/wounds/{patient_id}/visits/{visit_id}/analyze")
+def analyze_monthly_wound_visit(
+    patient_id: str,
+    visit_id: str,
+    request: Request
+):
+    """
+    Explicitly triggers multi-photo analysis for a monthly wound visit.
+    Analyzes all uploaded photos together as one cohesive visit.
+    """
+    user_info = require_active_user(request)
+    user_id = user_info.get("user_id") or user_info.get("id") or "CLINICIAN"
+    user_role = user_info.get("role") or "DOCTOR"
+    user_name = user_info.get("user_name") or user_info.get("name") or "Clinician"
+
+    patient = db.get_patient(patient_id)
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient profile not found.")
+
+    visit = db.get_wound_visit(visit_id)
+    if not visit:
+        raise HTTPException(status_code=404, detail="Wound visit not found.")
+    if visit.get("patient_id") != patient["patient_id"]:
+        raise HTTPException(status_code=400, detail="Patient ID mismatch.")
+
+    photos = visit.get("photos", [])
+    if not photos:
+        raise HTTPException(status_code=400, detail="Please upload at least 1 photo before analyzing this visit.")
+
+    image_paths = []
+    storage_dir = db.storage_dir()
+    for p in photos:
+        loc_path = os.path.join(storage_dir, p["image_filename"])
+        if not os.path.isfile(loc_path):
+            temp_dest = os.path.join(tempfile.gettempdir(), p["image_filename"])
+            if db.retrieve_uploaded_file(p["image_filename"], temp_dest):
+                loc_path = temp_dest
+        image_paths.append(loc_path)
+
+    raw_reports = db.get_patient_reports(patient["patient_id"])
+    approved_reports = [
+        r for r in raw_reports
+        if r.get("validation_status") != "REJECTED" and not r.get("is_deleted")
+    ]
+
+    patient_context = {
+        "patientId": patient["patient_id"],
+        "age": patient["age"],
+        "gender": patient["gender"],
+        "bloodGroup": patient.get("blood_group", "O+"),
+    }
+
+    try:
+        analysis_result = wound_engine.analyze_multi_wound_photos(
+            image_paths=image_paths,
+            patient_context=patient_context,
+            wound_location=visit.get("wound_location", "Unspecified"),
+            wound_type_tag=visit.get("wound_type_tag", "Unspecified"),
+            visit_date=visit.get("visit_date", time.strftime("%Y-%m-%d")),
+            doctor_notes=visit.get("doctor_notes", ""),
+            approved_reports=approved_reports
+        )
+        db.save_wound_visit_analysis(visit_id, analysis_result, status="ANALYZED")
+        db.log_activity(
+            user_id, user_name, user_role,
+            f"Analyzed {len(photos)} photos for monthly wound visit {visit_id} ({visit['visit_month']})",
+            "WOUND_VISIT", visit_id
+        )
+        db.log_audit(
+            user_id, user_role, "WOUND_VISIT_ANALYZED",
+            "WOUND_VISIT", visit_id, status="SUCCESS",
+            details=f"Analyzed {len(photos)} photos. Severity: {analysis_result.get('severity_indicator')}"
+        )
+    except Exception as exc:
+        logger.error("Visit analysis error: %s", exc)
+        db.save_wound_visit_analysis(visit_id, {"error": str(exc)}, status="FAILED")
+        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(exc)}")
+
+    return db.get_wound_visit(visit_id)
+
+
+@app.get("/api/wounds/{patient_id}/visits")
+def get_patient_wound_visits_endpoint(patient_id: str, request: Request):
+    """Retrieve all chronological monthly visits for a patient."""
+    user_info = require_active_user(request)
+    patient = db.get_patient(patient_id)
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient profile not found.")
+    return db.get_patient_wound_visits(patient["patient_id"])
+
+
+@app.get("/api/wounds/{patient_id}/visits/{visit_id}")
+def get_single_wound_visit_endpoint(patient_id: str, visit_id: str, request: Request):
+    """Retrieve a single monthly visit with its full photo gallery and analysis."""
+    user_info = require_active_user(request)
+    visit = db.get_wound_visit(visit_id)
+    if not visit:
+        raise HTTPException(status_code=404, detail="Wound visit not found.")
+    if visit.get("patient_id") != patient_id:
+        raise HTTPException(status_code=400, detail="Patient ID mismatch.")
+    return visit
+
+
+@app.post("/api/wounds/{patient_id}/visits/compare")
+def compare_monthly_wound_visits(
+    patient_id: str,
+    req: WoundVisitCompareRequest,
+    request: Request
+):
+    """
+    Compare two monthly wound visits belonging to the same patient.
+    Rejects cross-patient comparison and unanalyzed visits.
+    Produces side-by-side photo comparison, delta calculations, and trajectory.
+    """
+    user_info = require_active_user(request)
+    user_id = user_info.get("user_id") or user_info.get("id") or "CLINICIAN"
+    user_role = user_info.get("role") or "DOCTOR"
+    user_name = user_info.get("user_name") or user_info.get("name") or "Clinician"
+
+    v1_id = req.visit_id_1 or req.visit_id_a
+    v2_id = req.visit_id_2 or req.visit_id_b
+
+    v1 = db.get_wound_visit(v1_id) if v1_id else None
+    v2 = db.get_wound_visit(v2_id) if v2_id else None
+
+    if not v1 or not v2:
+        raise HTTPException(status_code=404, detail="One or both selected wound visits not found.")
+
+    if v1.get("patient_id") != patient_id or v2.get("patient_id") != patient_id or v1.get("patient_id") != v2.get("patient_id"):
+        raise HTTPException(status_code=400, detail="Cross-patient comparison rejected: Selected visits belong to different patients.")
+
+    if v1.get("status") != "ANALYZED" or v2.get("status") != "ANALYZED":
+        raise HTTPException(status_code=400, detail="Both visits must be analyzed before comparison can be generated.")
+
+    try:
+        comparison_res = wound_engine.compare_wound_visits(v1, v2)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    db.log_activity(
+        user_id, user_name, user_role,
+        f"Compared monthly wound visits {v1.get('visit_month')} and {v2.get('visit_month')} for Patient {patient_id}",
+        "WOUND_VISIT_COMPARISON", f"{v1['visit_id']}_vs_{v2['visit_id']}"
+    )
+
+    return comparison_res
+
+
+@app.delete("/api/wounds/{patient_id}/visits/{visit_id}")
+def delete_monthly_wound_visit(patient_id: str, visit_id: str, request: Request):
+    """Delete a monthly wound visit and its photos."""
+    user_info = require_active_user(request)
+    visit = db.get_wound_visit(visit_id)
+    if not visit:
+        raise HTTPException(status_code=404, detail="Wound visit not found.")
+    if visit.get("patient_id") != patient_id:
+        raise HTTPException(status_code=400, detail="Patient ID mismatch.")
+
+    success = db.delete_wound_visit(visit_id)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to delete wound visit.")
+
+    return {"success": True, "message": f"Wound visit {visit_id} deleted."}
 
 
 @app.get("/api/health")

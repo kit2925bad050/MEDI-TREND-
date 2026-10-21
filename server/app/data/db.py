@@ -236,7 +236,7 @@ class DatabaseManager:
     def get_connection(self):
         if self._use_postgres:
             return _PgConnection(psycopg2.connect(os.environ["DATABASE_URL"]))
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30.0, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         return conn
 
@@ -356,6 +356,12 @@ class DatabaseManager:
     def _init_db(self):
         conn = self.get_connection()
         cursor = conn.cursor()
+        if not self._use_postgres:
+            try:
+                cursor.execute("PRAGMA journal_mode=WAL;")
+                cursor.execute("PRAGMA busy_timeout = 30000;")
+            except Exception:
+                pass
 
         # 1. Admin Users Table
         cursor.execute("""
@@ -476,6 +482,7 @@ class DatabaseManager:
             ("patients", "deactivation_reason TEXT"),
             ("patients", "deactivated_by TEXT"),
             ("patients", "deactivated_at TEXT"),
+            ("patients", "max_reports INTEGER DEFAULT 10"),
             ("medical_reports", "is_deleted INTEGER DEFAULT 0"),
             ("medical_reports", "deleted_by TEXT"),
             ("medical_reports", "deleted_at TEXT"),
@@ -740,6 +747,42 @@ class DatabaseManager:
             review_status TEXT DEFAULT 'PENDING',
             reviewed_by TEXT,
             reviewed_at TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
+
+        # 19. Wound Monthly Visits Table (Patient-Wise Monthly Visit Records)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS wound_visits (
+            id TEXT PRIMARY KEY,
+            visit_id TEXT UNIQUE NOT NULL,
+            patient_id TEXT NOT NULL,
+            visit_date TEXT NOT NULL,
+            visit_month TEXT NOT NULL,
+            wound_location TEXT DEFAULT 'Unspecified',
+            wound_type_tag TEXT DEFAULT 'Unspecified',
+            status TEXT DEFAULT 'PENDING',
+            doctor_notes TEXT DEFAULT '',
+            uploaded_by TEXT NOT NULL,
+            analysis_result TEXT,
+            analyzed_at TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
+
+        # 20. Wound Visit Photos Table (Multiple photos per monthly visit, 1-10 photos)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS wound_visit_photos (
+            id TEXT PRIMARY KEY,
+            photo_id TEXT UNIQUE NOT NULL,
+            visit_id TEXT NOT NULL,
+            patient_id TEXT NOT NULL,
+            image_path TEXT NOT NULL,
+            image_filename TEXT NOT NULL,
+            image_mime_type TEXT NOT NULL,
+            image_size_bytes INTEGER NOT NULL,
+            order_index INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
         """)
@@ -2187,7 +2230,7 @@ class DatabaseManager:
         cursor.execute("""
         INSERT INTO activity_logs (id, user_id, user_name, user_role, action_text, entity_type, entity_id)
         VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (str(uuid.uuid4()), user_id, user_name, role, action_text, entity_type, entity_id))
+        """, (str(uuid.uuid4()), user_id or "SYSTEM", user_name or "Hospital Staff", role or "DOCTOR", action_text, entity_type, entity_id))
         conn.commit()
         conn.close()
 
@@ -2389,6 +2432,260 @@ class DatabaseManager:
         conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute("DELETE FROM wound_assessments WHERE assessment_id = ?", (assessment_id,))
+        conn.commit()
+        conn.close()
+        return True
+
+    # ==================== MONTHLY WOUND VISIT & PHOTO TRACKING OPERATIONS ====================
+    def _format_wound_visit_row(self, r: Any, photos: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+        d = dict(r)
+        if d.get("analysis_result") and isinstance(d["analysis_result"], str):
+            try:
+                d["analysis_result"] = json.loads(d["analysis_result"])
+            except Exception:
+                pass
+        d["photos"] = photos if photos is not None else []
+        d["photo_count"] = len(d["photos"])
+        return d
+
+    def create_wound_visit(
+        self,
+        patient_id: str,
+        visit_date: str,
+        wound_location: str = "Unspecified",
+        wound_type_tag: str = "Unspecified",
+        uploaded_by: str = "Doctor",
+        doctor_notes: str = "",
+        allow_duplicate_date: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Create a new monthly wound visit record or retrieve pending visit if duplicate on date not requested.
+        """
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        try:
+            from datetime import datetime
+            dt = datetime.strptime(visit_date.strip(), "%Y-%m-%d")
+            visit_month = dt.strftime("%B %Y")
+        except Exception:
+            visit_month = visit_date[:7] if len(visit_date) >= 7 else "Unknown Month"
+
+        if not allow_duplicate_date:
+            cursor.execute(
+                "SELECT * FROM wound_visits WHERE patient_id = ? AND visit_date = ? ORDER BY created_at DESC LIMIT 1",
+                (patient_id, visit_date.strip())
+            )
+            existing = cursor.fetchone()
+            if existing:
+                row_dict = dict(existing)
+                cursor.execute(
+                    "SELECT * FROM wound_visit_photos WHERE visit_id = ? ORDER BY order_index ASC, created_at ASC",
+                    (row_dict["visit_id"],)
+                )
+                photo_rows = [dict(p) for p in cursor.fetchall()]
+                for p in photo_rows:
+                    p["image_url"] = f"/api/wounds/image/{p['image_filename']}"
+                conn.close()
+                return self._format_wound_visit_row(existing, photo_rows)
+
+        row_id = str(uuid.uuid4())
+        visit_id = f"WVIS-{patient_id[:8]}-{uuid.uuid4().hex[:6].upper()}"
+
+        cursor.execute("""
+            INSERT INTO wound_visits (
+                id, visit_id, patient_id, visit_date, visit_month,
+                wound_location, wound_type_tag, status, doctor_notes,
+                uploaded_by, analysis_result, analyzed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, NULL, NULL)
+        """, (
+            row_id,
+            visit_id,
+            patient_id,
+            (visit_date or "").strip(),
+            visit_month,
+            (wound_location or "").strip() or "Unspecified",
+            (wound_type_tag or "").strip() or "Unspecified",
+            (doctor_notes or "").strip(),
+            (uploaded_by or "").strip() or "Doctor"
+        ))
+        conn.commit()
+
+        cursor.execute("SELECT * FROM wound_visits WHERE visit_id = ?", (visit_id,))
+        created = cursor.fetchone()
+        conn.close()
+        return self._format_wound_visit_row(created, [])
+
+    def add_photo_to_wound_visit(
+        self,
+        visit_id: str,
+        patient_id: str,
+        image_path: str,
+        image_filename: str,
+        image_mime_type: str,
+        image_size_bytes: int
+    ) -> Dict[str, Any]:
+        """
+        Add a photo to an existing wound visit.
+        Enforces a maximum of 10 photos per visit.
+        Keeps visit in PENDING status until explicitly analyzed.
+        """
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT COUNT(*) FROM wound_visit_photos WHERE visit_id = ?", (visit_id,))
+        count = cursor.fetchone()[0]
+        if count >= 10:
+            conn.close()
+            raise ValueError("Maximum limit of 10 photos reached for this visit.")
+
+        photo_id = f"WPH-{uuid.uuid4().hex[:8].upper()}"
+        cursor.execute("""
+            INSERT INTO wound_visit_photos (
+                id, photo_id, visit_id, patient_id, image_path,
+                image_filename, image_mime_type, image_size_bytes, order_index
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            str(uuid.uuid4()),
+            photo_id,
+            visit_id,
+            patient_id,
+            image_path,
+            image_filename,
+            image_mime_type,
+            image_size_bytes,
+            count
+        ))
+
+        cursor.execute("UPDATE wound_visits SET updated_at = CURRENT_TIMESTAMP WHERE visit_id = ?", (visit_id,))
+        conn.commit()
+
+        cursor.execute("SELECT * FROM wound_visit_photos WHERE photo_id = ?", (photo_id,))
+        p = dict(cursor.fetchone())
+        p["image_url"] = f"/api/wounds/image/{p['image_filename']}"
+        conn.close()
+        return p
+
+    def remove_photo_from_wound_visit(self, visit_id: str, photo_id: str) -> bool:
+        """Remove an individual photo from a visit before or after analysis."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT * FROM wound_visit_photos WHERE visit_id = ? AND photo_id = ?", (visit_id, photo_id))
+        photo = cursor.fetchone()
+        if not photo:
+            conn.close()
+            return False
+
+        photo_dict = dict(photo)
+        if photo_dict.get("image_path"):
+            try:
+                self.delete_uploaded_file(photo_dict["image_path"])
+            except Exception:
+                pass
+
+        cursor.execute("DELETE FROM wound_visit_photos WHERE photo_id = ?", (photo_id,))
+        cursor.execute("UPDATE wound_visits SET updated_at = CURRENT_TIMESTAMP WHERE visit_id = ?", (visit_id,))
+        conn.commit()
+        conn.close()
+        return True
+
+    def get_patient_wound_visits(self, patient_id: str) -> List[Dict[str, Any]]:
+        """Retrieve all chronological monthly visits and photos for a patient."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute(
+            "SELECT * FROM wound_visits WHERE patient_id = ? ORDER BY visit_date ASC, created_at ASC",
+            (patient_id,)
+        )
+        visits = [dict(v) for v in cursor.fetchall()]
+
+        cursor.execute(
+            "SELECT * FROM wound_visit_photos WHERE patient_id = ? ORDER BY order_index ASC, created_at ASC",
+            (patient_id,)
+        )
+        all_photos = [dict(p) for p in cursor.fetchall()]
+        for p in all_photos:
+            p["image_url"] = f"/api/wounds/image/{p['image_filename']}"
+
+        conn.close()
+
+        photos_by_visit = {}
+        for p in all_photos:
+            v_id = p["visit_id"]
+            if v_id not in photos_by_visit:
+                photos_by_visit[v_id] = []
+            photos_by_visit[v_id].append(p)
+
+        formatted_visits = []
+        for v in visits:
+            v_photos = photos_by_visit.get(v["visit_id"], [])
+            formatted_visits.append(self._format_wound_visit_row(v, v_photos))
+
+        return formatted_visits
+
+    def get_wound_visit(self, visit_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve a specific monthly wound visit and all its photos."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT * FROM wound_visits WHERE visit_id = ?", (visit_id,))
+        visit_row = cursor.fetchone()
+        if not visit_row:
+            conn.close()
+            return None
+
+        cursor.execute(
+            "SELECT * FROM wound_visit_photos WHERE visit_id = ? ORDER BY order_index ASC, created_at ASC",
+            (visit_id,)
+        )
+        photos = [dict(p) for p in cursor.fetchall()]
+        for p in photos:
+            p["image_url"] = f"/api/wounds/image/{p['image_filename']}"
+
+        conn.close()
+        return self._format_wound_visit_row(visit_row, photos)
+
+    def save_wound_visit_analysis(
+        self,
+        visit_id: str,
+        analysis_result: Dict[str, Any],
+        status: str = "ANALYZED"
+    ) -> bool:
+        """Save analysis output for a visit and mark it ANALYZED."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        res_str = json.dumps(analysis_result) if not isinstance(analysis_result, str) else analysis_result
+        now_ts = time.strftime("%Y-%m-%d %H:%M:%S")
+
+        cursor.execute("""
+            UPDATE wound_visits
+            SET analysis_result = ?, status = ?, analyzed_at = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE visit_id = ?
+        """, (res_str, status, now_ts, visit_id))
+
+        conn.commit()
+        conn.close()
+        return True
+
+    def delete_wound_visit(self, visit_id: str) -> bool:
+        """Delete a visit and all its stored photos."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT * FROM wound_visit_photos WHERE visit_id = ?", (visit_id,))
+        photos = [dict(p) for p in cursor.fetchall()]
+        for p in photos:
+            if p.get("image_path"):
+                try:
+                    self.delete_uploaded_file(p["image_path"])
+                except Exception:
+                    pass
+
+        cursor.execute("DELETE FROM wound_visit_photos WHERE visit_id = ?", (visit_id,))
+        cursor.execute("DELETE FROM wound_visits WHERE visit_id = ?", (visit_id,))
         conn.commit()
         conn.close()
         return True
@@ -2662,6 +2959,33 @@ class DatabaseManager:
             conn.commit()
             conn.close()
             return True, "Proposed slot declined. Appointment cancelled."
+
+    def get_patient_report_limit(self, patient_id: str) -> int:
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT max_reports FROM patients WHERE patient_id = ?", (patient_id,))
+        row = cursor.fetchone()
+        conn.close()
+        if row and row["max_reports"] is not None:
+            return int(row["max_reports"])
+        return 10
+
+    def update_patient_report_limit(self, patient_id: str, max_reports: int, admin_name: str, reason: str = "") -> Dict[str, Any]:
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("UPDATE patients SET max_reports = ? WHERE patient_id = ?", (max_reports, patient_id))
+        conn.commit()
+        conn.close()
+        self.log_audit(
+            user_id=admin_name,
+            role="ADMIN",
+            action="PATIENT_LIMIT_UPDATED",
+            entity_type="PATIENT",
+            entity_id=patient_id,
+            details=f"Updated max report limit to {max_reports}. Reason: {reason}",
+            actor_user_id=admin_name
+        )
+        return {"patient_id": patient_id, "max_reports": max_reports, "status": "success"}
 
 db = DatabaseManager()
 
