@@ -4,6 +4,8 @@ import {
   AIAnalysisResult,
   AuditLogEntry,
   UserRole,
+  WoundAssessmentRecord,
+  WoundComparisonResult,
 } from '../types';
 import { supabase } from './supabase';
 
@@ -1808,4 +1810,139 @@ export async function respondAppointmentAlternative(appointmentId: string, accep
   } catch {}
 
   return { success: true };
+}
+
+// ==================== AI WOUND & ULCER ASSESSMENT CLIENT API ====================
+export function getWoundImageUrl(imageFilename: string): string {
+  if (!imageFilename) return '';
+  if (imageFilename.startsWith('http')) return imageFilename;
+  const sessionStr = localStorage.getItem('medi_trend_session');
+  let token = '';
+  if (sessionStr) {
+    try {
+      token = JSON.parse(sessionStr).token || '';
+    } catch {}
+  }
+  const tokenParam = token ? `?token=${encodeURIComponent(token)}` : '';
+  return `${API_BASE}/wounds/image/${encodeURIComponent(imageFilename)}${tokenParam}`;
+}
+
+export async function uploadAndAssessWound(
+  patientId: string,
+  formData: FormData
+): Promise<WoundAssessmentRecord> {
+  const headers = { ...getAuthHeaders() };
+  delete headers['Content-Type']; // Let browser generate multipart/form-data with boundary
+
+  try {
+    const res = await fetch(`${API_BASE}/wounds/${encodeURIComponent(patientId)}/upload-and-assess`, {
+      method: 'POST',
+      headers,
+      body: formData,
+    });
+    return await readApiResponse<WoundAssessmentRecord>(
+      res,
+      'Failed to upload and analyze wound image.'
+    );
+  } catch (err) {
+    throw apiConnectionError(err);
+  }
+}
+
+export async function fetchPatientWoundAssessments(
+  patientId: string
+): Promise<WoundAssessmentRecord[]> {
+  try {
+    const res = await fetch(`${API_BASE}/wounds/${encodeURIComponent(patientId)}/assessments`, {
+      headers: getAuthHeaders(),
+    });
+    if (!res.ok) {
+      if (res.status === 404) return [];
+      return await readApiResponse<WoundAssessmentRecord[]>(res, 'Failed to fetch wound assessments.');
+    }
+    const data = await res.json();
+    return Array.isArray(data) ? data : [];
+  } catch (err) {
+    console.error('fetchPatientWoundAssessments error:', err);
+    return [];
+  }
+}
+
+export async function fetchSingleWoundAssessment(
+  patientId: string,
+  assessmentId: string
+): Promise<WoundAssessmentRecord> {
+  try {
+    const res = await fetch(
+      `${API_BASE}/wounds/${encodeURIComponent(patientId)}/assessments/${encodeURIComponent(assessmentId)}`,
+      { headers: getAuthHeaders() }
+    );
+    return await readApiResponse<WoundAssessmentRecord>(res, 'Failed to load wound assessment details.');
+  } catch (err) {
+    throw apiConnectionError(err);
+  }
+}
+
+export async function compareWoundAssessments(
+  patientId: string,
+  assessmentIds: string[]
+): Promise<WoundComparisonResult> {
+  try {
+    const res = await fetch(`${API_BASE}/wounds/${encodeURIComponent(patientId)}/compare`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ assessment_ids: assessmentIds }),
+    });
+    return await readApiResponse<WoundComparisonResult>(
+      res,
+      'Failed to generate longitudinal wound comparison.'
+    );
+  } catch (err) {
+    throw apiConnectionError(err);
+  }
+}
+
+export async function updateWoundDoctorNotes(
+  patientId: string,
+  assessmentId: string,
+  doctorNotes: string,
+  reviewStatus: string = 'VALIDATED'
+): Promise<WoundAssessmentRecord> {
+  try {
+    const res = await fetch(
+      `${API_BASE}/wounds/${encodeURIComponent(patientId)}/assessments/${encodeURIComponent(assessmentId)}/notes`,
+      {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ doctor_notes: doctorNotes, review_status: reviewStatus }),
+      }
+    );
+    return await readApiResponse<WoundAssessmentRecord>(
+      res,
+      'Failed to update clinical review notes.'
+    );
+  } catch (err) {
+    throw apiConnectionError(err);
+  }
+}
+
+export async function deleteWoundAssessment(
+  patientId: string,
+  assessmentId: string
+): Promise<{ success: boolean; message: string }> {
+  try {
+    const res = await fetch(
+      `${API_BASE}/wounds/${encodeURIComponent(patientId)}/assessments/${encodeURIComponent(assessmentId)}`,
+      {
+        method: 'DELETE',
+        headers: getAuthHeaders(),
+      }
+    );
+    return await readApiResponse<{ success: boolean; message: string }>(
+      res,
+      'Failed to delete wound assessment.'
+    );
+  } catch (err) {
+    throw apiConnectionError(err);
+  }
 }

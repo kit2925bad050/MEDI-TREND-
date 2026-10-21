@@ -123,3 +123,10 @@ class AuditLogEntry(BaseModel):
     provider: Optional[str] = None
     status: str = "SUCCESS"
     details: Optional[str] = None
+
+class WoundNotesUpdateRequest(BaseModel):
+    doctor_notes: str = ""
+    review_status: Optional[str] = "VALIDATED"
+
+class WoundComparisonRequest(BaseModel):
+    assessment_ids: List[str]

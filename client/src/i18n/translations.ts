@@ -53,6 +53,8 @@ export interface TranslationDictionary {
   nav_documents: string;
   nav_history: string;
   nav_appointments: string;
+  nav_wounds: string;
+  wound_assessment_title: string;
   nav_upload_pdf: string;
 
   // Admin Navigation
@@ -335,6 +337,8 @@ export const translations: Record<Language, TranslationDictionary> = {
     nav_documents: 'Documents',
     nav_history: 'History & Audit',
     nav_appointments: 'Appointments',
+    nav_wounds: 'AI Wound & Ulcer',
+    wound_assessment_title: 'AI Wound & Ulcer Assessment',
     nav_upload_pdf: '+ Upload PDF Report',
 
     // Admin Navigation
@@ -634,6 +638,8 @@ export const translations: Record<Language, TranslationDictionary> = {
     nav_documents: 'ஆவணங்கள்',
     nav_history: 'வரலாறு & தணிக்கை',
     nav_appointments: 'மருத்துவ சந்திப்புகள் (Appointments)',
+    nav_wounds: 'AI புண் மதிப்பாய்வு (Wound & Ulcer)',
+    wound_assessment_title: 'AI புண் & புண் மதிப்பாய்வு',
     nav_upload_pdf: '+ அறிக்கை பதிவேற்றுக',
 
     // Admin Navigation

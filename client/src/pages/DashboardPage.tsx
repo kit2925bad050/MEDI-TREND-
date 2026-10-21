@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { PatientProfile, ReportRecord, AIAnalysisResult } from '../types';
+import { PatientProfile, ReportRecord, AIAnalysisResult, WoundAssessmentRecord } from '../types';
 import {
   FileText,
   Brain,
@@ -18,11 +18,16 @@ import {
   ChevronRight,
   AlertCircle,
   FileCheck,
+  AlertTriangle,
+  Camera,
+  Layers,
 } from 'lucide-react';
 import { EmptyState } from '../components/common/EmptyState';
 import { SummaryStatCards } from '../components/SummaryStatCards';
 import { PatientAvatar } from '../components/PatientAvatar';
 import { useLanguage } from '../context/LanguageContext';
+import { fetchPatientWoundAssessments, getWoundImageUrl } from '../services/api';
+import { WoundUploadModal } from '../components/wound/WoundUploadModal';
 
 interface DashboardPageProps {
   patient: PatientProfile | null;
@@ -46,6 +51,18 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
   const navigate = useNavigate();
   const { dict } = useLanguage();
   const [isPatientDropdownOpen, setIsPatientDropdownOpen] = useState(false);
+  const [wounds, setWounds] = useState<WoundAssessmentRecord[]>([]);
+  const [isWoundUploadOpen, setIsWoundUploadOpen] = useState(false);
+
+  useEffect(() => {
+    if (patient?.patientId) {
+      fetchPatientWoundAssessments(patient.patientId)
+        .then((data) => setWounds(data || []))
+        .catch(() => setWounds([]));
+    } else {
+      setWounds([]);
+    }
+  }, [patient?.patientId]);
 
   if (!patient) {
     return (
@@ -268,6 +285,147 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
         </div>
       )}
 
+      {/* AI Wound & Ulcer Assessment and Progress Monitoring Section */}
+      <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200/80 dark:border-slate-800 p-6 shadow-sm space-y-4">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-rose-50 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400 flex items-center justify-center shadow-sm">
+              <Camera className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="text-base font-extrabold text-slate-900 dark:text-white">
+                  AI Wound & Ulcer Assessment and Progress Monitoring
+                </h3>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-100 dark:bg-rose-950/70 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800">
+                  {wounds.length} {wounds.length === 1 ? 'Evaluation' : 'Evaluations'}
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                Multi-visit photographic analysis, tissue composition breakdown, warning sign surveillance, and lab correlation
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 w-full sm:w-auto">
+            <button
+              onClick={() => setIsWoundUploadOpen(true)}
+              className="px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs shadow-md shadow-rose-600/20 transition flex items-center gap-1.5 flex-1 sm:flex-none justify-center"
+            >
+              <Upload className="w-3.5 h-3.5" />
+              <span>+ Upload Wound Image</span>
+            </button>
+            <button
+              onClick={() => navigate('/wounds')}
+              className="px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 font-bold text-xs transition flex items-center gap-1.5 flex-1 sm:flex-none justify-center"
+            >
+              <span>Open Wound Workspace</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+
+        {wounds.length > 0 ? (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
+            {/* Latest assessment card */}
+            {(() => {
+              const latest = wounds[wounds.length - 1];
+              const imgUrl = getWoundImageUrl(latest.image_filename);
+              const tb = latest.visible_characteristics?.tissue_breakdown;
+              const hasWarnings = (latest.warning_signs || []).length > 0;
+
+              return (
+                <div className="md:col-span-2 p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/80 dark:border-slate-800 flex flex-col sm:flex-row items-start sm:items-center gap-4">
+                  <div className="w-24 h-24 rounded-2xl bg-slate-900 overflow-hidden flex-shrink-0 border border-slate-200 dark:border-slate-700">
+                    {imgUrl ? (
+                      <img src={imgUrl} alt="Latest wound" className="w-full h-full object-cover" />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center text-xs text-slate-500">
+                        IMG
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex-1 space-y-1.5 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold text-slate-900 dark:text-white truncate">
+                        {latest.wound_location}
+                      </span>
+                      <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300">
+                        {latest.severity_indicator}
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-slate-500 dark:text-slate-400 font-mono">
+                      Visit Date: {latest.visit_date} • Tag: {latest.wound_type_tag}
+                    </div>
+                    {tb && (
+                      <div className="flex flex-wrap items-center gap-3 text-[11px] pt-1">
+                        <span className="text-emerald-600 dark:text-emerald-400 font-semibold">
+                          Granulation: <b>{tb.granulation_percent}%</b>
+                        </span>
+                        <span className="text-amber-600 dark:text-amber-400 font-semibold">
+                          Slough: <b>{tb.slough_percent}%</b>
+                        </span>
+                        <span className="text-rose-600 dark:text-rose-400 font-semibold">
+                          Necrotic: <b>{tb.necrotic_percent}%</b>
+                        </span>
+                      </div>
+                    )}
+                    {hasWarnings && (
+                      <div className="text-[10px] text-rose-600 dark:text-rose-400 font-bold flex items-center gap-1 pt-0.5">
+                        <AlertTriangle className="w-3.5 h-3.5" />
+                        <span>Warning signs flagged for clinician evaluation</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Quick Status / Comparison Summary Box */}
+            <div className="p-4 rounded-2xl bg-rose-50/40 dark:bg-rose-950/20 border border-rose-200/60 dark:border-rose-900/50 flex flex-col justify-between space-y-2">
+              <div className="space-y-1">
+                <span className="text-[10px] uppercase font-bold text-rose-700 dark:text-rose-300 tracking-wider">
+                  Longitudinal Tracking
+                </span>
+                <div className="text-xs font-bold text-slate-900 dark:text-white">
+                  {wounds.length >= 2
+                    ? '2+ Examinations Recorded'
+                    : '1 Baseline Examination Recorded'}
+                </div>
+                <p className="text-[11px] text-slate-600 dark:text-slate-400 leading-relaxed">
+                  {wounds.length >= 2
+                    ? 'Longitudinal comparison is ready. Inspect changes in granulation, non-viable slough, and correlated lab biomarkers.'
+                    : 'Upload follow-up wound photographs on subsequent patient visits to assess healing progress and tissue shifts.'}
+                </p>
+              </div>
+              <button
+                onClick={() => navigate('/wounds')}
+                className="w-full py-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-bold text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-slate-700 transition text-center"
+              >
+                {wounds.length >= 2 ? 'View Comparison & Trends →' : 'View Detailed Assessment →'}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/30 border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs text-slate-500">
+            <div>
+              <span className="font-bold text-slate-700 dark:text-slate-300">
+                No wound photographs recorded yet for this patient profile.
+              </span>
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                Upload foot ulcer, venous leg wound, or surgical incision images to generate AI-assisted tissue breakdown and progress monitoring.
+              </p>
+            </div>
+            <button
+              onClick={() => setIsWoundUploadOpen(true)}
+              className="px-3.5 py-1.5 rounded-xl bg-rose-600 text-white font-bold text-xs hover:bg-rose-700 transition"
+            >
+              + Upload Wound Image
+            </button>
+          </div>
+        )}
+      </div>
+
       {/* Two Column Overview: Workspaces & Recent Patient Milestones */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left 7 Cols: Quick Navigation Cards */}
@@ -389,6 +547,19 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Wound Upload Modal triggered from Doctor Dashboard */}
+      {isWoundUploadOpen && patient && (
+        <WoundUploadModal
+          patient={patient}
+          isOpen={isWoundUploadOpen}
+          onClose={() => setIsWoundUploadOpen(false)}
+          onSuccess={(newAssessment) => {
+            setWounds((prev) => [...prev, newAssessment]);
+            setIsWoundUploadOpen(false);
+          }}
+        />
+      )}
     </div>
   );
 };

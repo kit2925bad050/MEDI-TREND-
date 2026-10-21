@@ -33,6 +33,7 @@ hospital_intelligence.db
 storage/
 temp_storage/
 uploads/
+server/app/uploaded_reports/
 *.pdf
 *.docx
 

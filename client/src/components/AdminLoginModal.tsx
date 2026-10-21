@@ -112,9 +112,29 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
             </div>
           )}
 
-          <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-700/60 text-xs text-slate-600 dark:text-slate-300 flex items-center gap-2.5">
-            <KeyRound className="w-4 h-4 text-purple-600 dark:text-purple-400 flex-shrink-0" />
-            <span>{isTamil ? 'உண்மையான தரவுத்தள அங்கீகாரம்.' : 'Real database-backed cryptographic authority.'}</span>
+          {/* Default Credentials Helper */}
+          <div className="p-3.5 rounded-2xl bg-purple-50/50 dark:bg-purple-950/30 border border-purple-200/80 dark:border-purple-800/60 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-purple-700 dark:text-purple-300 flex items-center gap-1.5">
+                <KeyRound className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400" />
+                <span>{isTamil ? 'முன்னிருப்பு நிர்வாகி விவரங்கள்' : 'Default Admin Credentials'}</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setUsername('admin');
+                  setPassword('admin13152425');
+                  setErrorMsg(null);
+                }}
+                className="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-purple-600 text-white hover:bg-purple-700 transition"
+              >
+                {isTamil ? 'தானாக நிரப்புக' : 'Auto Fill'}
+              </button>
+            </div>
+            <div className="flex items-center justify-between text-xs text-purple-900/80 dark:text-purple-200/80 font-mono bg-white dark:bg-slate-900 p-2 rounded-xl border border-purple-100 dark:border-purple-900/40">
+              <span>user: <b className="text-purple-600 dark:text-purple-400">admin</b></span>
+              <span>pwd: <b className="text-purple-600 dark:text-purple-400">admin13152425</b></span>
+            </div>
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-4">

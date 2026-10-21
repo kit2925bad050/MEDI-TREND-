@@ -18,6 +18,7 @@ import {
   Activity,
   BarChart3,
   Cpu,
+  Camera,
 } from 'lucide-react';
 import { UserRole } from '../types';
 import logoImg from '../assets/logo.png';
@@ -52,6 +53,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { to: '/appointments', label: dict.nav_appointments, icon: Calendar },
     { to: '/reports', label: dict.nav_reports, icon: FileText },
     { to: '/analysis', label: dict.nav_analysis, icon: Brain, badge: 'AI' },
+    { to: '/wounds', label: isTamil ? 'புண் மதிப்பாய்வு' : 'AI Wound & Ulcer', icon: Camera, badge: 'Vision' },
     { to: '/trends', label: dict.nav_trends, icon: TrendingUp },
     { to: '/clinical-summary', label: dict.nav_clinical_summary, icon: Languages, badge: 'தமிழ்' },
     { to: '/documents', label: dict.nav_documents, icon: FolderOpen },
@@ -65,6 +67,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { to: '/admin/patients', label: dict.nav_admin_patients, icon: Users },
     { to: '/appointments', label: dict.nav_appointments, icon: Calendar },
     { to: '/admin/reports', label: dict.nav_admin_reports, icon: FileText },
+    { to: '/wounds', label: isTamil ? 'புண் மதிப்பாய்வு' : 'AI Wound & Ulcer', icon: Camera, badge: 'Vision' },
     { to: '/admin/analyses', label: dict.nav_admin_analyses, icon: Cpu },
     { to: '/admin/activity', label: dict.nav_admin_activity, icon: Activity },
     { to: '/admin/audit', label: dict.nav_admin_audit, icon: Shield },

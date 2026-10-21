@@ -160,6 +160,35 @@ CREATE TABLE IF NOT EXISTS ai_providers (
     last_active VARCHAR(64)
 );
 
+-- 11. Wound Assessments Table (AI-Assisted Wound & Ulcer Progress Monitoring)
+CREATE TABLE IF NOT EXISTS wound_assessments (
+    id VARCHAR(64) PRIMARY KEY,
+    assessment_id VARCHAR(64) UNIQUE NOT NULL,
+    patient_id VARCHAR(32) NOT NULL REFERENCES patients(patient_id) ON DELETE CASCADE,
+    image_path TEXT NOT NULL,
+    image_filename VARCHAR(256) NOT NULL,
+    image_mime_type VARCHAR(64) NOT NULL,
+    image_size_bytes INTEGER NOT NULL,
+    visit_date VARCHAR(32) NOT NULL,
+    upload_date VARCHAR(64) NOT NULL,
+    uploaded_by VARCHAR(128) NOT NULL,
+    wound_location VARCHAR(128),
+    wound_type_tag VARCHAR(128),
+    visible_characteristics JSONB,
+    severity_indicator VARCHAR(64),
+    dimensions_info JSONB,
+    categories_considered JSONB,
+    limitations_notes JSONB,
+    warning_signs JSONB,
+    clinical_recommendations JSONB,
+    linked_report_summary JSONB,
+    doctor_notes TEXT,
+    review_status VARCHAR(64) DEFAULT 'PENDING',
+    reviewed_by VARCHAR(128),
+    reviewed_at VARCHAR(64),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
 -- ==========================================================
 -- SEED INITIAL DESIGNATED ADMINISTRATIVE & CLINICAL ACCOUNTS
 -- ==========================================================

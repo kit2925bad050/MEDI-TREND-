@@ -40,6 +40,7 @@ import { ClinicalSummaryPage } from './pages/ClinicalSummaryPage';
 import { DocumentsPage } from './pages/DocumentsPage';
 import { HistoryPage } from './pages/HistoryPage';
 import { AppointmentsPage } from './pages/AppointmentsPage';
+import { WoundAssessmentPage } from './pages/WoundAssessmentPage';
 
 // Admin Pages
 import { AdminDashboardPage } from './pages/admin/AdminDashboardPage';
@@ -369,6 +370,15 @@ export const AppContent: React.FC = () => {
                 selectedParam={selectedParam}
                 onOpenUpload={() => setIsUploadOpen(true)}
                 onOpenExport={() => setIsExportOpen(true)}
+              />
+            }
+          />
+          <Route
+            path="/wounds"
+            element={
+              <WoundAssessmentPage
+                currentPatient={currentPatient}
+                onOpenCreatePatient={() => setIsAddPatientOpen(true)}
               />
             }
           />

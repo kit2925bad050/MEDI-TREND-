@@ -27,7 +27,11 @@ from fastapi.responses import FileResponse, JSONResponse
 from .data.db import db, validate_password_strength
 from .orchestrator.langgraph_orchestrator import LangGraphMedicalOrchestrator
 from .services.pdf_extractor import extract_parameters_from_pdf
-from .models.schemas import PatientProfile, ReportRecord, ParameterData, ComparisonRequest, AIAnalysisResult, AuditLogEntry
+from .services.wound_analyzer import wound_engine, validate_wound_image_file
+from .models.schemas import (
+    PatientProfile, ReportRecord, ParameterData, ComparisonRequest,
+    AIAnalysisResult, AuditLogEntry, WoundNotesUpdateRequest, WoundComparisonRequest
+)
 
 app = FastAPI(
     title="MEDI-TREND AI - Longitudinal Patient Report Intelligence Platform",
@@ -214,6 +218,10 @@ class DoctorAvailabilityRequest(BaseModel):
     slot_duration_mins: Optional[int] = 30
     break_start: Optional[str] = "01:00 PM"
     break_end: Optional[str] = "02:00 PM"
+
+class WoundTranslateRequest(BaseModel):
+    text: Optional[str] = None
+    assessment: Optional[Dict[str, Any]] = None
     blocked_dates: Optional[List[str]] = None
     is_available: Optional[bool] = True
 
@@ -246,7 +254,11 @@ def extract_token_from_request(request: Request) -> Optional[str]:
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
         return auth_header[7:].strip()
-    return request.headers.get("x-auth-token") or request.headers.get("x-token")
+    header_token = request.headers.get("x-auth-token") or request.headers.get("x-token")
+    if header_token:
+        return header_token
+    # Query parameter fallback for media/image elements (<img src="...?token=...">)
+    return request.query_params.get("token")
 
 def get_current_user_and_role(request: Request) -> Dict[str, Any]:
     """
@@ -1496,6 +1508,347 @@ def respond_appointment_route(appointment_id: str, req: RespondAlternativeReques
     if not success:
         raise HTTPException(status_code=400, detail=msg)
     return {"success": True, "message": msg}
+
+# ==================== AI WOUND & ULCER ASSESSMENT ENDPOINTS ====================
+@app.post("/api/wounds/{patient_id}/upload-and-assess")
+async def upload_and_assess_wound(
+    patient_id: str,
+    file: UploadFile = File(...),
+    wound_location: str = Form("Unspecified"),
+    wound_type_tag: str = Form("Unspecified"),
+    visit_date: str = Form(""),
+    doctor_notes: str = Form(""),
+    request: Request = None
+):
+    """
+    AI-Assisted Wound & Ulcer Assessment Endpoint:
+    1. Enforces doctor / clinical authorization and patient-level access controls.
+    2. Validates image MIME types (JPG, JPEG, PNG, WEBP), file size (<= 20MB), and image integrity.
+    3. Analyzes image using Gemini Multimodal Vision with grounded clinical rule engine fallback.
+    4. Integrates approved medical report biomarkers (HbA1c, inflammatory markers, albumin, eGFR).
+    5. Saves assessment persistently to database.
+    """
+    user_info = get_current_user_and_role(request)
+    user_role = user_info.get("role", "UNKNOWN")
+    user_name = user_info.get("user_name", "Clinician")
+    user_id = user_info.get("user_id", "")
+
+    if user_role not in {"ADMIN", "DOCTOR", "CLINICIAN", "STAFF"}:
+        raise HTTPException(
+            status_code=403,
+            detail="Forbidden: Only authorized medical doctors and clinicians may upload wound assessments."
+        )
+
+    patient = db.get_patient(patient_id)
+    if not patient:
+        raise HTTPException(status_code=404, detail=f"Patient record '{patient_id}' not found.")
+
+    upload_name = (file.filename or "").replace("\\", "/").split("/")[-1]
+    if not upload_name:
+        raise HTTPException(status_code=400, detail="The uploaded image must have a valid filename.")
+
+    ext = os.path.splitext(upload_name)[1].lower()
+    temp_filename = f"wound_temp_{uuid.uuid4().hex}{ext}"
+    temp_path = os.path.join(db.storage_dir(), temp_filename)
+
+    try:
+        total_size = 0
+        with open(temp_path, "wb") as buffer:
+            while chunk := await file.read(1024 * 1024):
+                total_size += len(chunk)
+                if total_size > 20 * 1024 * 1024:
+                    raise HTTPException(status_code=413, detail="Wound image exceeds the 20MB file size limit.")
+                buffer.write(chunk)
+    except HTTPException:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        raise
+    except OSError as exc:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        raise HTTPException(status_code=500, detail="Unable to process uploaded wound image.") from exc
+
+    # Validate image security, format & integrity
+    val_res = validate_wound_image_file(temp_path, upload_name)
+    if not val_res["is_valid"]:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        db.log_audit(
+            user_id, user_role, "WOUND_IMAGE_VALIDATION_REJECTED",
+            "WOUND_IMAGE", upload_name, status="REJECTED",
+            details=val_res.get("reason", "Invalid wound image")
+        )
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "INVALID_WOUND_IMAGE", "message": val_res.get("reason", "Only JPG, PNG, and WEBP wound images are supported.")}
+        )
+
+    # Store image persistently
+    dest_filename = f"WOUND_{patient['patient_id']}_{uuid.uuid4().hex[:10]}{val_res['extension']}"
+    stored_path = db.store_uploaded_file(temp_path, dest_filename, content_type=val_res["mime_type"])
+
+    # Clean up temp file if still present
+    if os.path.exists(temp_path):
+        try:
+            os.remove(temp_path)
+        except Exception:
+            pass
+
+    # Retrieve patient's approved medical reports
+    raw_reports = db.get_patient_reports(patient["patient_id"])
+    approved_reports = [
+        r for r in raw_reports
+        if r.get("validation_status") != "REJECTED" and not r.get("is_deleted")
+    ]
+
+    patient_context = {
+        "patientId": patient["patient_id"],
+        "age": patient["age"],
+        "gender": patient["gender"],
+        "bloodGroup": patient.get("blood_group", "O+"),
+    }
+
+    # Run AI-Assisted Assessment
+    examination_date = visit_date.strip() if visit_date else time.strftime("%Y-%m-%d")
+    ai_result = wound_engine.analyze_wound_image(
+        image_path=os.path.join(db.storage_dir(), dest_filename),
+        patient_context=patient_context,
+        wound_location=wound_location,
+        wound_type_tag=wound_type_tag,
+        visit_date=examination_date,
+        doctor_notes=doctor_notes,
+        approved_reports=approved_reports
+    )
+
+    assessment_id = f"WA-{uuid.uuid4().hex[:8].upper()}"
+    assessment_record = {
+        "id": str(uuid.uuid4()),
+        "assessment_id": assessment_id,
+        "patient_id": patient["patient_id"],
+        "image_path": stored_path,
+        "image_filename": dest_filename,
+        "image_mime_type": val_res["mime_type"],
+        "image_size_bytes": val_res["size_bytes"],
+        "visit_date": examination_date,
+        "upload_date": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "uploaded_by": user_name,
+        "wound_location": wound_location,
+        "wound_type_tag": wound_type_tag,
+        "visible_characteristics": ai_result.get("visible_characteristics", {}),
+        "severity_indicator": ai_result.get("severity_indicator", "Undetermined"),
+        "dimensions_info": ai_result.get("dimensions_info", {}),
+        "categories_considered": ai_result.get("categories_considered", []),
+        "limitations_notes": ai_result.get("limitations_notes", []),
+        "warning_signs": ai_result.get("warning_signs", []),
+        "clinical_recommendations": ai_result.get("clinical_recommendations", {}),
+        "linked_report_summary": ai_result.get("linked_report_summary", {}),
+        "doctor_notes": doctor_notes,
+        "review_status": "PENDING",
+        "reviewed_by": None,
+        "reviewed_at": None,
+    }
+
+    saved = db.save_wound_assessment(assessment_record)
+    saved["image_url"] = f"/api/wounds/image/{dest_filename}"
+
+    db.log_activity(
+        user_id, user_name, user_role,
+        f"Conducted AI wound assessment {assessment_id} for {patient['full_name']} ({wound_location})",
+        "WOUND_ASSESSMENT", assessment_id
+    )
+    db.log_audit(
+        user_id, user_role, "WOUND_ASSESSMENT_CREATED",
+        "WOUND_ASSESSMENT", assessment_id, provider=ai_result.get("provider_used", "AI Engine"),
+        status="SUCCESS", details=f"Severity: {ai_result.get('severity_indicator')}. Location: {wound_location}"
+    )
+
+    return saved
+
+
+@app.get("/api/wounds/{patient_id}/assessments")
+def get_patient_wound_assessments_endpoint(patient_id: str, request: Request):
+    """Retrieve all chronological wound assessments for a specific patient."""
+    user_info = get_current_user_and_role(request)
+    user_role = user_info.get("role", "UNKNOWN")
+    if user_role == "PATIENT" and user_info.get("user_id") != patient_id:
+        raise HTTPException(status_code=403, detail="Forbidden: You may only view your own wound assessments.")
+
+    patient = db.get_patient(patient_id)
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient record not found.")
+
+    assessments = db.get_patient_wound_assessments(patient["patient_id"])
+    for a in assessments:
+        a["image_url"] = f"/api/wounds/image/{a.get('image_filename', os.path.basename(a.get('image_path', '')))}"
+    return assessments
+
+
+@app.get("/api/wounds/{patient_id}/assessments/{assessment_id}")
+def get_single_wound_assessment(patient_id: str, assessment_id: str, request: Request):
+    """Retrieve a single wound assessment record."""
+    user_info = get_current_user_and_role(request)
+    assessment = db.get_wound_assessment(assessment_id)
+    if not assessment:
+        raise HTTPException(status_code=404, detail="Wound assessment record not found.")
+
+    if assessment["patient_id"] != patient_id:
+        raise HTTPException(status_code=403, detail="Assessment does not match the requested patient.")
+
+    assessment["image_url"] = f"/api/wounds/image/{assessment.get('image_filename', os.path.basename(assessment.get('image_path', '')))}"
+    return assessment
+
+
+@app.post("/api/wounds/{patient_id}/compare")
+def compare_wounds_endpoint(patient_id: str, req: WoundComparisonRequest, request: Request):
+    """
+    Compare two or more wound assessments belonging to the same patient.
+    Strictly verifies patient isolation and outputs longitudinal progress metrics.
+    """
+    user_info = get_current_user_and_role(request)
+    if len(req.assessment_ids) < 2:
+        raise HTTPException(status_code=400, detail="Please select at least 2 wound assessments to compare.")
+
+    assessments: List[Dict[str, Any]] = []
+    for a_id in req.assessment_ids:
+        rec = db.get_wound_assessment(a_id)
+        if not rec:
+            raise HTTPException(status_code=404, detail=f"Wound assessment '{a_id}' not found.")
+        if rec["patient_id"] != patient_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Cross-patient wound comparison is strictly prohibited. All selected images must belong to the same patient."
+            )
+        rec["image_url"] = f"/api/wounds/image/{rec.get('image_filename', os.path.basename(rec.get('image_path', '')))}"
+        assessments.append(rec)
+
+    try:
+        comparison_res = wound_engine.compare_wounds(assessments)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return comparison_res
+
+
+@app.put("/api/wounds/{patient_id}/assessments/{assessment_id}/notes")
+def update_wound_notes_endpoint(
+    patient_id: str,
+    assessment_id: str,
+    req: WoundNotesUpdateRequest,
+    request: Request
+):
+    """Doctor validates assessment and records clinical review notes."""
+    user_info = get_current_user_and_role(request)
+    user_role = user_info.get("role", "UNKNOWN")
+    user_name = user_info.get("user_name", "Doctor")
+    user_id = user_info.get("user_id", "")
+
+    if user_role not in {"DOCTOR", "ADMIN", "CLINICIAN"}:
+        raise HTTPException(status_code=403, detail="Forbidden: Only licensed physicians may sign off on wound assessments.")
+
+    assessment = db.get_wound_assessment(assessment_id)
+    if not assessment:
+        raise HTTPException(status_code=404, detail="Wound assessment not found.")
+    if assessment["patient_id"] != patient_id:
+        raise HTTPException(status_code=400, detail="Wound assessment patient mismatch.")
+
+    success = db.update_wound_doctor_notes(
+        assessment_id=assessment_id,
+        doctor_notes=req.doctor_notes,
+        review_status=req.review_status or "VALIDATED",
+        doctor_name=user_name
+    )
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to update clinical review status.")
+
+    db.log_activity(
+        user_id, user_name, user_role,
+        f"Validated and recorded clinical notes for wound assessment {assessment_id}",
+        "WOUND_ASSESSMENT", assessment_id
+    )
+    db.log_audit(
+        user_id, user_role, "WOUND_ASSESSMENT_VALIDATED",
+        "WOUND_ASSESSMENT", assessment_id, status="SUCCESS",
+        details=f"Review status: {req.review_status}"
+    )
+
+    updated = db.get_wound_assessment(assessment_id)
+    updated["image_url"] = f"/api/wounds/image/{updated.get('image_filename', os.path.basename(updated.get('image_path', '')))}"
+    return updated
+
+
+@app.post("/api/wounds/translate")
+def translate_wound_content_endpoint(req: WoundTranslateRequest, request: Request):
+    """
+    Translates wound assessment observations and clinical recommendations
+    into clear, medically appropriate Tamil.
+    Preserves numerical metrics, scale markers, dates, and biomarker values.
+    """
+    get_current_user_and_role(request)
+    if req.text:
+        return {"translated_text": wound_engine.translate_text_to_tamil(req.text)}
+    if req.assessment:
+        return wound_engine.translate_wound_assessment(req.assessment)
+    return {"error": "Provide 'text' or 'assessment' to translate."}
+
+
+@app.get("/api/wounds/image/{image_filename}")
+def serve_wound_image(image_filename: str, request: Request):
+    """Securely stream/serve wound image with MIME type validation."""
+    get_current_user_and_role(request)
+
+    clean_filename = os.path.basename(image_filename)
+    local_path = os.path.join(db.storage_dir(), clean_filename)
+
+    if not os.path.isfile(local_path):
+        temp_dest = os.path.join(tempfile.gettempdir(), clean_filename)
+        if db.retrieve_uploaded_file(clean_filename, temp_dest):
+            local_path = temp_dest
+        else:
+            raise HTTPException(status_code=404, detail="Wound image file not found.")
+
+    ext = os.path.splitext(clean_filename)[1].lower()
+    media_type = "image/jpeg"
+    if ext == ".png":
+        media_type = "image/png"
+    elif ext == ".webp":
+        media_type = "image/webp"
+
+    return FileResponse(local_path, media_type=media_type)
+
+
+@app.delete("/api/wounds/{patient_id}/assessments/{assessment_id}")
+def delete_wound_assessment_endpoint(patient_id: str, assessment_id: str, request: Request):
+    """Delete a wound assessment and its stored image."""
+    user_info = get_current_user_and_role(request)
+    user_role = user_info.get("role", "UNKNOWN")
+    user_name = user_info.get("user_name", "Doctor")
+    user_id = user_info.get("user_id", "")
+
+    if user_role not in {"DOCTOR", "ADMIN"}:
+        raise HTTPException(status_code=403, detail="Forbidden: Insufficient privileges to delete wound assessments.")
+
+    assessment = db.get_wound_assessment(assessment_id)
+    if not assessment:
+        raise HTTPException(status_code=404, detail="Wound assessment not found.")
+    if assessment["patient_id"] != patient_id:
+        raise HTTPException(status_code=400, detail="Wound assessment patient mismatch.")
+
+    success = db.delete_wound_assessment(assessment_id)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to delete wound assessment.")
+
+    db.log_activity(
+        user_id, user_name, user_role,
+        f"Deleted wound assessment {assessment_id} for Patient {patient_id}",
+        "WOUND_ASSESSMENT", assessment_id
+    )
+    db.log_audit(
+        user_id, user_role, "WOUND_ASSESSMENT_DELETED",
+        "WOUND_ASSESSMENT", assessment_id, status="SUCCESS"
+    )
+
+    return {"success": True, "message": f"Wound assessment {assessment_id} successfully deleted."}
+
 
 @app.get("/api/health")
 @app.get("/health")

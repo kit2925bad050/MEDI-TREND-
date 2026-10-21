@@ -107,6 +107,55 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             </div>
           )}
 
+          {/* Default Credentials Helper */}
+          <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700/80 space-y-2.5">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+                <KeyRound className="w-3.5 h-3.5 text-brand-500" />
+                <span>{isTamil ? 'முன்னிருப்பு உள்நுழைவு விவரங்கள்' : 'Default Login Credentials'}</span>
+              </span>
+              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-brand-50 dark:bg-brand-950/60 text-brand-700 dark:text-brand-300 border border-brand-200/60 dark:border-brand-800/60">
+                Demo Ready
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <button
+                type="button"
+                onClick={() => {
+                  setEmailOrUser('dr.arvind@hospital.org');
+                  setPassword('doctor1315');
+                  setErrorMsg(null);
+                }}
+                className="p-2 rounded-xl text-left bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-700 hover:border-brand-500 hover:bg-brand-50/40 dark:hover:bg-brand-950/30 transition group"
+              >
+                <div className="font-bold text-slate-800 dark:text-slate-200 text-[11px] group-hover:text-brand-600 flex items-center justify-between">
+                  <span>👨‍⚕️ {isTamil ? 'மருத்துவர்' : 'Doctor'}</span>
+                  <span className="text-[9px] text-brand-600 font-normal underline">Fill</span>
+                </div>
+                <div className="text-[10px] text-slate-500 dark:text-slate-400 truncate mt-0.5 font-mono">dr.arvind@hospital.org</div>
+                <div className="text-[10px] text-slate-400 dark:text-slate-500 font-mono">pwd: doctor1315</div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setEmailOrUser('priya.staff@hospital.org');
+                  setPassword('staff1315');
+                  setErrorMsg(null);
+                }}
+                className="p-2 rounded-xl text-left bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-700 hover:border-brand-500 hover:bg-brand-50/40 dark:hover:bg-brand-950/30 transition group"
+              >
+                <div className="font-bold text-slate-800 dark:text-slate-200 text-[11px] group-hover:text-brand-600 flex items-center justify-between">
+                  <span>🩺 {isTamil ? 'பணியாளர்' : 'Staff'}</span>
+                  <span className="text-[9px] text-brand-600 font-normal underline">Fill</span>
+                </div>
+                <div className="text-[10px] text-slate-500 dark:text-slate-400 truncate mt-0.5 font-mono">priya.staff@hospital.org</div>
+                <div className="text-[10px] text-slate-400 dark:text-slate-500 font-mono">pwd: staff1315</div>
+              </button>
+            </div>
+          </div>
+
           <form onSubmit={handleSignIn} className="space-y-4">
             <div>
               <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
