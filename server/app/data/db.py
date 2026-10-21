@@ -254,9 +254,33 @@ class DatabaseManager:
             return False
         cursor.execute("""
             SELECT 1 FROM information_schema.columns
-            WHERE table_name = %s AND column_name = %s
+            WHERE table_schema = current_schema() AND table_name = ? AND column_name = ?
         """, (table, column))
         return cursor.fetchone() is not None
+
+    def _table_exists(self, cursor, table: str) -> bool:
+        if self._use_postgres:
+            cursor.execute(
+                "SELECT 1 FROM information_schema.tables "
+                "WHERE table_schema = current_schema() AND table_name = ?",
+                (table,),
+            )
+            return cursor.fetchone() is not None
+        cursor.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,))
+        return cursor.fetchone() is not None
+
+    def _column_exists(self, cursor, table: str, column: str) -> bool:
+        if self._use_postgres:
+            return self._pg_column_exists(cursor, table, column)
+        cursor.execute(f"PRAGMA table_info({table})")
+        return any(row["name"] == column for row in cursor.fetchall())
+
+    def _apply_schema_migrations(self, cursor, migrations) -> None:
+        for table, col_def in migrations:
+            column = col_def.split()[0]
+            if not self._table_exists(cursor, table) or self._column_exists(cursor, table, column):
+                continue
+            cursor.execute(f"ALTER TABLE {table} ADD COLUMN {col_def}")
 
     # ==================== FILE STORAGE HELPERS ====================
     def storage_dir(self) -> str:
@@ -519,14 +543,7 @@ class DatabaseManager:
             ("audit_logs", "target_user_id TEXT"),
             ("audit_logs", "reason TEXT"),
         ]
-        for table, col_def in migrations:
-            col_name = col_def.split()[0]
-            if self._use_postgres and self._pg_column_exists(cursor, table, col_name):
-                continue
-            try:
-                cursor.execute(f"ALTER TABLE {table} ADD COLUMN {col_def}")
-            except Exception:
-                pass
+        self._apply_schema_migrations(cursor, migrations)
 
         # 6. Medical Reports Table
         cursor.execute("""
@@ -843,11 +860,7 @@ class DatabaseManager:
             ("audit_logs", "target_user_id TEXT"),
             ("audit_logs", "reason TEXT"),
         ]
-        for table, col_def in migrations:
-            try:
-                cursor.execute(f"ALTER TABLE {table} ADD COLUMN {col_def}")
-            except Exception:
-                pass
+        self._apply_schema_migrations(cursor, migrations)
 
         cursor.execute("SELECT value FROM system_metadata WHERE key = 'initial_seed_completed'")
         seed_row = cursor.fetchone()

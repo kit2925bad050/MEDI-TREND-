@@ -82,6 +82,39 @@ class TestMonthlyWoundTracking(unittest.TestCase):
         except Exception:
             pass
 
+    def test_00_login_returns_a_persistent_authenticated_session(self):
+        response = self.client.post(
+            "/api/auth/login",
+            json={
+                "username_or_email": self.test_doctor["email"],
+                "password": "Password123!",
+            },
+        )
+        assert response.status_code == 200, response.text
+        login = response.json()
+        assert login["success"] is True
+        assert login["role"] == "DOCTOR"
+        assert login["token"]
+
+        visits_url = f"/api/wounds/{self.patient_a_id}/visits"
+        authenticated = self.client.get(
+            visits_url,
+            headers={"Authorization": f"Bearer {login['token']}"},
+        )
+        assert authenticated.status_code == 200, authenticated.text
+
+        logout = self.client.post(
+            "/api/auth/logout",
+            headers={"Authorization": f"Bearer {login['token']}"},
+        )
+        assert logout.status_code == 200, logout.text
+        assert db.validate_session(login["token"]) is None
+        revoked = self.client.get(
+            visits_url,
+            headers={"Authorization": f"Bearer {login['token']}"},
+        )
+        assert revoked.status_code == 401
+
     def test_01_create_monthly_visit(self):
         """1. Create a monthly visit record linked to Patient A."""
         res = self.client.post(

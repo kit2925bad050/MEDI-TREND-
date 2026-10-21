@@ -340,6 +340,7 @@ export async function logoutUser(userName: string, userRole: string) {
     await fetch(`${API_BASE}/auth/logout`, {
       method: 'POST',
       headers: {
+        ...getAuthHeaders(),
         'Content-Type': 'application/json',
         'x-user-name': userName,
         'x-user-role': userRole,

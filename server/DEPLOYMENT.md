@@ -45,17 +45,24 @@ VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_[YOUR_KEY]
 
 ## Vercel Deployment Steps
 
-1. Connect your GitHub repository to Vercel.
-2. Configure the project:
-   - **Framework Preset:** Other
-   - **Root Directory:** `server/` (or deploy the whole repo with a `vercel.json` that routes `/api` to the server)
-   - **Build Command:** `pip install -r requirements.txt`
-   - **Dev Command:** `python -m uvicorn app.main:app --reload`
-   - **Install Command:** `pip install -r requirements.txt`
-3. Add environment variables in Vercel project settings.
-4. Deploy.
+1. Import the repository into Vercel.
+2. Keep **Root Directory** set to the repository root. The root `vercel.json` builds `client/` and routes `/api/*` to `api/index.py`; setting the root to `server/` bypasses that configuration and can leave the browser unable to reach the login API.
+3. Do not override the build/output settings from the checked-in `vercel.json`.
+4. Add the required production environment variables below for **Production**, and also for **Preview** if you will test login on preview deployments.
+5. Deploy, then verify `/api/health` returns HTTP 200 and test login with an account present in the configured PostgreSQL database.
 
-### vercel.json (optional, for monorepo deployment)
+### Login deployment checklist
+
+- Set `DATABASE_URL` to the existing Supabase PostgreSQL database containing the login accounts. A newly created empty database has no existing user accounts; the application seeds demo users only when its initial schema is created. Never point production at a different or empty database just to make deployment start.
+- For Supabase, use the provider's PostgreSQL connection string and ensure its network/SSL settings permit connections from Vercel. Keep the URL server-side; do not prefix it with `VITE_`.
+- Leave `VITE_API_URL` and `VITE_API_BASE_URL` unset when the frontend and API share this Vercel project. The frontend then calls the same-origin `/api` route. If hosting the API separately, set one of these to the backend origin and set `CORS_ORIGINS` to the exact frontend origin.
+- Set Vercel's environment variables for every deployment environment you use. An unset `DATABASE_URL` intentionally prevents the API from starting on Vercel rather than losing sessions in an ephemeral database.
+- After changing environment variables, create a new deployment; existing builds do not automatically receive changed frontend build-time settings.
+- If login still fails, inspect the Vercel Function logs for import/startup or database connection errors, then check the browser Network request to `/api/auth/login`. A 404/HTML response usually means incorrect root/routing configuration; a 5xx points to function startup or database configuration; a 401 indicates the supplied account/password was not accepted by the configured database.
+
+Database schema migrations now skip columns that already exist and tables that have not yet been created, so fresh PostgreSQL initialization and later serverless cold starts do not poison the schema transaction.
+
+The repository already includes a root `vercel.json`; do not replace it with a second Vercel configuration or set the project root to `server/`.
 
 ```json
 {

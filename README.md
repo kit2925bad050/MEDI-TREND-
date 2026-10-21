@@ -104,16 +104,16 @@ Local Vite development forwards `/api` requests to the backend on port 8000. Set
 
 ### Deploying to Vercel
 
-Import the repository into Vercel with the project root as the repository root. The checked-in `vercel.json` builds the Vite client and routes `/api/*` to the FastAPI function in `api/index.py`.
+Import the repository into Vercel with **Root Directory set to the repository root**. Do not select `server/` as the project root: the checked-in root `vercel.json` builds the Vite client and routes `/api/*` to the FastAPI function in `api/index.py`.
 
 Configure these environment variables in the Vercel project settings before deploying:
 
-- `DATABASE_URL`: Supabase PostgreSQL connection string (use the provider's pooled connection string when available).
+- `DATABASE_URL`: connection string for the existing persistent Supabase PostgreSQL database that contains your login accounts. The API intentionally does not start on Vercel without this setting, because serverless SQLite loses sessions between function invocations.
 - `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and `SUPABASE_STORAGE_BUCKET`: enable persistent uploaded-report storage. Keep the service-role key server-side; never use a `VITE_` prefix for it.
-- `CORS_ORIGINS`: the deployed frontend origin, for example `https://your-project.vercel.app`.
+- `CORS_ORIGINS`: only needed when frontend and API use different origins; set it to the exact deployed frontend origin.
 - `GEMINI_API_KEY` and/or `OPENROUTER_API_KEY` / `GROK_API_KEY`: AI-backed summaries and OCR; the deterministic analysis path remains available without AI credentials.
 
-Leave `VITE_API_URL` unset when the frontend and API are deployed in this same Vercel project. SQLite and local file storage are development fallbacks only; Vercel's filesystem is ephemeral, so production must use PostgreSQL and persistent object storage.
+Leave `VITE_API_URL` and `VITE_API_BASE_URL` unset when the frontend and API are deployed in this same Vercel project; the frontend then calls the same-origin `/api` route. Set variables in every Vercel environment you use (Production and Preview), then redeploy. SQLite and local file storage are development fallbacks only; Vercel's filesystem is ephemeral, so production must use PostgreSQL and persistent object storage. See [server/DEPLOYMENT.md](./server/DEPLOYMENT.md) for login troubleshooting and the deployment checklist.
 
 ---
 
