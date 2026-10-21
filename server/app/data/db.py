@@ -2443,5 +2443,225 @@ class DatabaseManager:
             "ai_providers": ai_providers
         }
 
+    # ==================== APPOINTMENT OPERATIONS & CONCURRENCY ====================
+    def create_appointment(
+        self,
+        patient_id: str,
+        patient_name: str,
+        doctor_id: str,
+        doctor_name: str,
+        department: str,
+        appointment_date: str,
+        slot_time: str,
+        reason: str = "",
+        created_by: str = "PATIENT"
+    ) -> Dict[str, Any]:
+        """
+        Atomically reserve appointment with conflict detection preventing double booking.
+        """
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        # 1. Check double booking conflict
+        cursor.execute("""
+        SELECT appointment_id, patient_name FROM appointments
+        WHERE doctor_id = ? AND appointment_date = ? AND slot_time = ? AND status IN ('CONFIRMED', 'PROPOSED')
+        """, (doctor_id, appointment_date, slot_time))
+        conflict = cursor.fetchone()
+        if conflict:
+            conn.close()
+            raise ValueError(f"This time slot ({slot_time} on {appointment_date}) has already been reserved for Dr. {doctor_name}. Please choose another available slot.")
+
+        apt_num = f"APT-{uuid.uuid4().hex[:6].upper()}"
+        apt_id = str(uuid.uuid4())
+
+        cursor.execute("""
+        INSERT INTO appointments (
+            id, appointment_id, patient_id, patient_name, doctor_id, doctor_name,
+            department, appointment_date, slot_time, status, reason, created_by, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'CONFIRMED', ?, ?, CURRENT_TIMESTAMP)
+        """, (
+            apt_id, apt_num, patient_id, patient_name, doctor_id, doctor_name,
+            department, appointment_date, slot_time, reason, created_by
+        ))
+        conn.commit()
+        conn.close()
+
+        self.log_audit(
+            user_id=created_by,
+            role="PATIENT" if created_by == patient_id else "CLINICIAN",
+            action="APPOINTMENT_BOOKED",
+            entity_type="APPOINTMENT",
+            entity_id=apt_num,
+            details=f"Confirmed consultation booking for {patient_name} with Dr. {doctor_name} ({department}) on {appointment_date} at {slot_time}.",
+            actor_user_id=created_by,
+            target_user_id=doctor_id,
+            reason=reason
+        )
+
+        return {
+            "success": True,
+            "appointment_id": apt_num,
+            "patient_id": patient_id,
+            "patient_name": patient_name,
+            "doctor_id": doctor_id,
+            "doctor_name": doctor_name,
+            "department": department,
+            "appointment_date": appointment_date,
+            "slot_time": slot_time,
+            "status": "CONFIRMED",
+            "reason": reason
+        }
+
+    def get_appointments_for_patient(self, patient_id: str) -> List[Dict[str, Any]]:
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM appointments WHERE patient_id = ? ORDER BY appointment_date DESC, created_at DESC", (patient_id,))
+        rows = [dict(r) for r in cursor.fetchall()]
+        conn.close()
+        return rows
+
+    def get_appointments_for_doctor(self, doctor_id: str) -> List[Dict[str, Any]]:
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM appointments WHERE doctor_id = ? ORDER BY appointment_date DESC, created_at DESC", (doctor_id,))
+        rows = [dict(r) for r in cursor.fetchall()]
+        conn.close()
+        return rows
+
+    def get_all_appointments(self) -> List[Dict[str, Any]]:
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM appointments ORDER BY appointment_date DESC, created_at DESC")
+        rows = [dict(r) for r in cursor.fetchall()]
+        conn.close()
+        return rows
+
+    def cancel_appointment(self, appointment_id: str, reason: str = "", cancelled_by: str = "PATIENT") -> Tuple[bool, str]:
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM appointments WHERE appointment_id = ?", (appointment_id,))
+        apt = cursor.fetchone()
+        if not apt:
+            conn.close()
+            return False, "Appointment record not found."
+
+        cursor.execute("UPDATE appointments SET status = 'CANCELLED', reason = ? WHERE appointment_id = ?", (reason or 'Cancelled by user', appointment_id))
+        conn.commit()
+        conn.close()
+
+        self.log_audit(
+            user_id=cancelled_by,
+            role="PATIENT",
+            action="APPOINTMENT_CANCELLED",
+            entity_type="APPOINTMENT",
+            entity_id=appointment_id,
+            details=f"Appointment {appointment_id} cancelled. Reason: {reason or 'Patient schedule change'}",
+            actor_user_id=cancelled_by,
+            reason=reason
+        )
+        return True, "Appointment cancelled successfully."
+
+    def reschedule_appointment(self, appointment_id: str, new_date: str, new_slot: str, updated_by: str = "PATIENT") -> Tuple[bool, str]:
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM appointments WHERE appointment_id = ?", (appointment_id,))
+        apt = cursor.fetchone()
+        if not apt:
+            conn.close()
+            return False, "Appointment not found."
+
+        doctor_id = apt["doctor_id"]
+        # Check conflict on new slot
+        cursor.execute("""
+        SELECT appointment_id FROM appointments
+        WHERE doctor_id = ? AND appointment_date = ? AND slot_time = ? AND status IN ('CONFIRMED', 'PROPOSED') AND appointment_id != ?
+        """, (doctor_id, new_date, new_slot, appointment_id))
+        conflict = cursor.fetchone()
+        if conflict:
+            conn.close()
+            return False, f"The new requested slot ({new_slot} on {new_date}) is already booked. Please choose another slot."
+
+        cursor.execute("""
+        UPDATE appointments SET
+            appointment_date = ?,
+            slot_time = ?,
+            status = 'CONFIRMED',
+            proposed_new_date = NULL,
+            proposed_new_slot = NULL
+        WHERE appointment_id = ?
+        """, (new_date, new_slot, appointment_id))
+        conn.commit()
+        conn.close()
+
+        self.log_audit(
+            user_id=updated_by,
+            role="PATIENT",
+            action="APPOINTMENT_RESCHEDULED",
+            entity_type="APPOINTMENT",
+            entity_id=appointment_id,
+            details=f"Appointment {appointment_id} moved to {new_date} at {new_slot}.",
+            actor_user_id=updated_by
+        )
+        return True, "Appointment rescheduled successfully."
+
+    def propose_appointment_alternative(self, appointment_id: str, proposed_date: str, proposed_slot: str, proposed_by: str = "ADMIN") -> Tuple[bool, str]:
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM appointments WHERE appointment_id = ?", (appointment_id,))
+        apt = cursor.fetchone()
+        if not apt:
+            conn.close()
+            return False, "Appointment not found."
+
+        cursor.execute("""
+        UPDATE appointments SET
+            proposed_new_date = ?,
+            proposed_new_slot = ?,
+            status = 'PROPOSED'
+        WHERE appointment_id = ?
+        """, (proposed_date, proposed_slot, appointment_id))
+        conn.commit()
+        conn.close()
+
+        self.log_audit(
+            user_id=proposed_by,
+            role="ADMIN",
+            action="APPOINTMENT_ALTERNATIVE_PROPOSED",
+            entity_type="APPOINTMENT",
+            entity_id=appointment_id,
+            details=f"Alternative slot proposed for {appointment_id}: {proposed_date} at {proposed_slot}.",
+            actor_user_id=proposed_by
+        )
+        return True, f"Alternative slot proposed ({proposed_date} {proposed_slot}). Awaiting patient confirmation."
+
+    def respond_to_proposed_appointment(self, appointment_id: str, accept: bool, patient_id: str) -> Tuple[bool, str]:
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM appointments WHERE appointment_id = ?", (appointment_id,))
+        apt = cursor.fetchone()
+        if not apt:
+            conn.close()
+            return False, "Appointment not found."
+
+        if accept and apt.get("proposed_new_date") and apt.get("proposed_new_slot"):
+            cursor.execute("""
+            UPDATE appointments SET
+                appointment_date = proposed_new_date,
+                slot_time = proposed_new_slot,
+                status = 'CONFIRMED',
+                proposed_new_date = NULL,
+                proposed_new_slot = NULL
+            WHERE appointment_id = ?
+            """, (appointment_id,))
+            conn.commit()
+            conn.close()
+            return True, "Alternative appointment slot accepted and confirmed."
+        else:
+            cursor.execute("UPDATE appointments SET status = 'CANCELLED', proposed_new_date = NULL, proposed_new_slot = NULL WHERE appointment_id = ?", (appointment_id,))
+            conn.commit()
+            conn.close()
+            return True, "Proposed slot declined. Appointment cancelled."
+
 db = DatabaseManager()
 

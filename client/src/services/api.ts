@@ -34,14 +34,14 @@ export interface ResetPasswordResponse extends BaseApiResponse {}
 
 const getApiBase = () => {
   const envUrl = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL;
-  if (!import.meta.env.PROD) {
-    return '/api';
-  }
   if (envUrl && typeof envUrl === 'string') {
     const clean = envUrl.trim().replace(/\/+$/, '');
     return clean.endsWith('/api') ? clean : `${clean}/api`;
   }
-  return import.meta.env.PROD ? '/api' : 'http://127.0.0.1:8000/api';
+  if (!import.meta.env.PROD) {
+    return 'http://127.0.0.1:8000/api';
+  }
+  return '/api';
 };
 
 const API_BASE = getApiBase();
